@@ -39,12 +39,13 @@ export class Pill {
     this.win = win;
     this.place();
     if (this.visible) win.showInactive();
-    screen.on('display-metrics-changed', () => this.place());
+    screen.on('display-metrics-changed', this.onDisplay);
   }
 
   /** bottom centre of the display that has the mouse cursor */
   place() {
-    if (!this.win) return;
+    // display-metrics-changed kann nach dem Schließen der Pille noch feuern (Aufwachen, Monitorwechsel)
+    if (!this.win || this.win.isDestroyed()) return;
     const d = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
     const wa = d.workArea;
     const x = Math.round(wa.x + (wa.width - PILL_W) / 2);
@@ -64,7 +65,8 @@ export class Pill {
   }
   level(lv: number) { this.send('pill:level', lv); }
   toast(text: string, kind: 'info' | 'success' | 'error' = 'info', ms = 2200) { if (this.visible) { this.place(); this.win?.showInactive(); } this.send('pill:toast', { text, kind, ms }); }
-  destroy() { this.win?.destroy(); this.win = null; }
+  private onDisplay = () => this.place();
+  destroy() { screen.removeListener('display-metrics-changed', this.onDisplay); this.win?.destroy(); this.win = null; }
 }
 
 export function createHub(opts: { show: boolean; offscreen?: boolean }): BrowserWindow {

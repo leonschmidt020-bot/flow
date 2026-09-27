@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <!-- Hardened Runtime: nur das Mikrofon wird freigeschaltet, sonst nichts -->
+  <key>com.apple.security.device.audio-input</key><true/>
+  <!-- Kalender + Erinnerungen (Notetaker-Kalender; „Flow lernt mit“: Termin/Aufgaben nur nach Klick übernehmen) -->
+  <key>com.apple.security.personal-information.calendars</key><true/>
+</dict></plist>

@@ -1,0 +1,229 @@
+// The pill: a small capsule at the bottom of the screen. Drawn on a canvas, closely following the Mac pill
+// (Sources/Murmur/Pill.swift): idle strip 44×9, listening 66×24 with 9 bars, hands-free 112×26 with ✕/■, transcribing dots.
+type Mode = 'idle' | 'recording' | 'handsfree' | 'transcribing' | 'loading' | 'hidden';
+interface PillState { mode: Mode; progress?: number; label?: string; alwaysVisible?: boolean }
+interface Toast { text: string; kind?: 'info' | 'success' | 'error'; ms?: number }
+interface PillApi {
+  onState(cb: (s: PillState) => void): void;
+  onLevel(cb: (lv: number) => void): void;
+  onToast(cb: (t: Toast) => void): void;
+  setInteractive(on: boolean): void;
+  click(what: 'cancel' | 'stop'): void;
+  ready(): void;
+}
+const api = (window as unknown as { flowPill?: PillApi }).flowPill;
+
+const canvas = document.getElementById('c') as HTMLCanvasElement;
+const g = canvas.getContext('2d')!;
+const FONT = '"Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif';
+
+let state: PillState = { mode: 'idle', alwaysVisible: true };
+let level = 0, smooth = 0;
+let w = 44, h = 9, alpha = 0;
+let bars = new Array(9).fill(2.2);
+const t0 = performance.now();
+let toast: { text: string; kind: string; until: number; born: number } | null = null;
+let hot: { cancel: DOMRect | null; stop: DOMRect | null } = { cancel: null, stop: null };
+let interactive = false;
+
+function targetSize(): [number, number] {
+  switch (state.mode) {
+    case 'idle': return [44, 9];
+    case 'recording': case 'transcribing': return [66, 24];
+    case 'handsfree': return [112, 26];
+    case 'loading': return [Math.max(176, textW(state.label ?? '', 11.5, 600) + 44), 28];
+    default: return [44, 9];
+  }
+}
+function targetAlpha() {
+  if (state.mode === 'hidden') return 0;
+  if (state.mode === 'idle' && !state.alwaysVisible) return 0;
+  return 1;
+}
+function textW(s: string, size: number, weight: number) {
+  g.font = `${weight} ${size}px ${FONT}`;
+  return g.measureText(s).width;
+}
+
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.round(innerWidth * dpr);
+  canvas.height = Math.round(innerHeight * dpr);
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+addEventListener('resize', resize);
+resize();
+
+function capsule(x: number, y: number, cw: number, ch: number) {
+  // stadium shape; radius = half of the shorter side (bars are vertical, the pill is horizontal)
+  const r = Math.max(0, Math.min(cw, ch) / 2);
+  g.beginPath();
+  g.roundRect(x, y, Math.max(0, cw), Math.max(0, ch), r);
+}
+
+function drawBars(cx: number, cy: number, count: number, maxH: number, t: number, lvl: number, barW = 2.2, gap = 2.3) {
+  if (bars.length !== count) bars = new Array(count).fill(barW);
+  const total = count * barW + (count - 1) * gap;
+  let x = cx - total / 2;
+  const lv = Math.min(1, Math.max(0, (lvl - 0.04) / 0.8));
+  const mid = (count - 1) / 2;
+  for (let i = 0; i < count; i++) {
+    const env = 1 - Math.pow(Math.abs(i - mid) / (mid + 1), 1.6) * 0.75;
+    const wobble = 0.55 + 0.45 * Math.abs(Math.sin(t * 7.3 + i * 1.7) * Math.cos(t * 3.1 + i * 0.9));
+    const target = barW + (maxH - barW) * lv * env * wobble;
+    bars[i] += (target - bars[i]) * 0.35;
+    const bh = Math.max(barW, bars[i]);
+    g.fillStyle = `rgba(255,255,255,${alpha})`;
+    capsule(x, cy - bh / 2, barW, bh);
+    g.fill();
+    x += barW + gap;
+  }
+}
+
+function drawDots(cx: number, cy: number, t: number) {
+  const count = 5, spacing = 6, radius = 1.6;
+  const total = (count - 1) * spacing;
+  for (let i = 0; i < count; i++) {
+    const x = cx - total / 2 + i * spacing;
+    const ph = t * 6.5 - i * 0.75;
+    const dy = Math.sin(ph) * 3;
+    const a = 0.45 + 0.55 * (0.5 + 0.5 * Math.sin(ph));
+    g.fillStyle = `rgba(255,255,255,${alpha * a})`;
+    g.beginPath(); g.arc(x, cy + dy, radius, 0, Math.PI * 2); g.fill();
+  }
+}
+
+function frame() {
+  const t = (performance.now() - t0) / 1000;
+  const [tw, th] = targetSize();
+  const k = 0.28;
+  w += (tw - w) * k; h += (th - h) * k;
+  alpha += (targetAlpha() - alpha) * 0.22;
+  smooth += (level - smooth) * 0.3;
+  const W = innerWidth, H = innerHeight;
+  g.clearRect(0, 0, W, H);
+  const cx = W / 2, cy = H - 26;
+  const x = cx - w / 2, y = cy - h / 2;
+  hot = { cancel: null, stop: null };
+
+  if (alpha > 0.005) {
+    const idleStrip = state.mode === 'idle';
+    // shadow + fill
+    g.save();
+    g.shadowColor = `rgba(0,0,0,${0.35 * alpha})`;
+    g.shadowBlur = 10; g.shadowOffsetY = 2;
+    capsule(x, y, w, h);
+    g.fillStyle = idleStrip ? `rgba(41,41,41,${0.92 * alpha})` : `rgba(0,0,0,${0.92 * alpha})`;
+    g.fill();
+    g.restore();
+    // hairline border
+    capsule(x + 0.5, y + 0.5, w - 1, h - 1);
+    g.lineWidth = 1;
+    g.strokeStyle = `rgba(255,255,255,${(h > 12 ? 0.32 : 0.42) * alpha})`;
+    g.stroke();
+
+    if (state.mode === 'recording') drawBars(cx, cy, 9, h - 9, t, smooth);
+    else if (state.mode === 'handsfree') {
+      // ✕ left, ■ (red) right, bars in the middle
+      const lx = x + 15, rx = x + w - 15;
+      g.fillStyle = `rgba(255,255,255,${0.16 * alpha})`;
+      g.beginPath(); g.arc(lx, cy, 8.5, 0, Math.PI * 2); g.fill();
+      g.strokeStyle = `rgba(255,255,255,${0.9 * alpha})`; g.lineWidth = 1.4; g.lineCap = 'round';
+      g.beginPath(); g.moveTo(lx - 3, cy - 3); g.lineTo(lx + 3, cy + 3); g.moveTo(lx + 3, cy - 3); g.lineTo(lx - 3, cy + 3); g.stroke();
+      g.fillStyle = `rgba(255,69,58,${alpha})`;
+      g.beginPath(); g.arc(rx, cy, 8.5, 0, Math.PI * 2); g.fill();
+      g.fillStyle = `rgba(255,255,255,${alpha})`;
+      g.beginPath(); g.roundRect(rx - 3, cy - 3, 6, 6, 1.3); g.fill();
+      drawBars(cx, cy, 9, h - 10, t, smooth);
+      hot = { cancel: new DOMRect(lx - 11, cy - 11, 22, 22), stop: new DOMRect(rx - 11, cy - 11, 22, 22) };
+    } else if (state.mode === 'transcribing') {
+      drawDots(cx, cy, t);
+      // subtle shimmer sweeping along the capsule
+      const sweep = ((t * 0.9) % 1.6) - 0.3;
+      const sx = x + w * sweep;
+      const grad = g.createLinearGradient(sx - 30, 0, sx + 30, 0);
+      grad.addColorStop(0, 'rgba(255,255,255,0)');
+      grad.addColorStop(0.5, `rgba(255,255,255,${0.22 * alpha})`);
+      grad.addColorStop(1, 'rgba(255,255,255,0)');
+      capsule(x + 0.5, y + 0.5, w - 1, h - 1);
+      g.strokeStyle = grad; g.lineWidth = 1.2; g.stroke();
+    } else if (state.mode === 'loading') {
+      const p = Math.max(0.03, Math.min(1, state.progress ?? 0));
+      g.font = `600 11.5px ${FONT}`; g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.fillStyle = `rgba(255,255,255,${0.92 * alpha})`;
+      g.fillText(state.label ?? '', cx, cy - 2);
+      const tx = x + 16, tw2 = w - 32, ty = y + h - 6;
+      g.fillStyle = `rgba(255,255,255,${0.2 * alpha})`; g.fillRect(tx, ty, tw2, 2);
+      g.fillStyle = `rgba(255,255,255,${alpha})`; g.fillRect(tx, ty, tw2 * p, 2);
+    }
+  }
+
+  // toast above the pill
+  if (toast) {
+    const now = performance.now();
+    const life = Math.min(1, (now - toast.born) / 160, Math.max(0, (toast.until - now) / 220));
+    if (now > toast.until) toast = null;
+    else {
+      g.font = `500 12px ${FONT}`;
+      const hasDot = toast.kind === 'error' || toast.kind === 'success';
+      const tw3 = Math.min(W - 24, g.measureText(toast.text).width + 28 + (hasDot ? 12 : 0));
+      const ty = cy - 13 - 10 - 24 + (1 - life) * 4;
+      const txx = cx - tw3 / 2;
+      g.save();
+      g.shadowColor = `rgba(0,0,0,${0.3 * life})`; g.shadowBlur = 12; g.shadowOffsetY = 3;
+      capsule(txx, ty, tw3, 24);
+      g.fillStyle = `rgba(0,0,0,${0.86 * life})`; g.fill();
+      g.restore();
+      capsule(txx + 0.5, ty + 0.5, tw3 - 1, 23);
+      g.strokeStyle = `rgba(255,255,255,${0.25 * life})`; g.lineWidth = 1; g.stroke();
+      const dot = toast.kind === 'error' ? '255,99,90' : toast.kind === 'success' ? '120,220,150' : '';
+      let textX = cx;
+      if (dot) {
+        g.fillStyle = `rgba(${dot},${life})`;
+        g.beginPath(); g.arc(txx + 13, ty + 12, 3, 0, Math.PI * 2); g.fill();
+        textX += 7;
+      }
+      g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.fillStyle = `rgba(255,255,255,${life})`;
+      g.fillText(toast.text, textX, ty + 12.5, W - 40);
+    }
+  }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+// click-through except over the hands-free buttons
+addEventListener('mousemove', (e) => {
+  const over = [hot.cancel, hot.stop].some((r) => r && e.clientX >= r.x && e.clientX <= r.right && e.clientY >= r.y && e.clientY <= r.bottom);
+  if (over !== interactive) { interactive = over; api?.setInteractive(over); }
+  document.body.style.cursor = over ? 'pointer' : 'default';
+});
+addEventListener('mousedown', (e) => {
+  const inside = (r: DOMRect | null) => !!r && e.clientX >= r.x && e.clientX <= r.right && e.clientY >= r.y && e.clientY <= r.bottom;
+  if (inside(hot.cancel)) api?.click('cancel');
+  else if (inside(hot.stop)) api?.click('stop');
+});
+
+function setState(s: PillState) { state = { ...state, ...s }; }
+function showToast(tt: Toast) { const now = performance.now(); toast = { text: tt.text, kind: tt.kind ?? 'info', born: now, until: now + (tt.ms ?? 2200) }; }
+function setLevel(lv: number) { level = Math.min(1, lv * 9); }
+
+api?.onState(setState);
+api?.onLevel(setLevel);
+api?.onToast(showToast);
+api?.ready();
+
+// render-check hooks (offscreen screenshots)
+const q = new URLSearchParams(location.search);
+if (q.has('render')) {
+  document.body.classList.add('render');
+  if (q.get('bg') === 'light') document.body.classList.add('light');
+  const mode = (q.get('mode') ?? 'idle') as Mode;
+  state = { mode, alwaysVisible: true, progress: Number(q.get('p') ?? 0.42), label: q.get('label') ?? 'Sprachmodell · 42 %' };
+  [w, h] = targetSize(); alpha = 1;
+  if (mode === 'recording' || mode === 'handsfree') { level = 0.6; smooth = 0.6; setInterval(() => { level = 0.35 + Math.random() * 0.5; }, 60); }
+  if (q.get('toast')) showToast({ text: q.get('toast')!, kind: (q.get('kind') as Toast['kind']) ?? 'info', ms: 60000 });
+}
+(window as unknown as { __pill: unknown }).__pill = { setState, showToast, setLevel };
+
+export {};

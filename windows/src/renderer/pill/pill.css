@@ -1,0 +1,4 @@
+html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: transparent; user-select: none; -webkit-user-select: none; }
+canvas { display: block; width: 100%; height: 100%; }
+body.render { background: radial-gradient(120% 140% at 30% 0%, #3a4150 0%, #1d222b 55%, #12151b 100%); }
+body.render.light { background: linear-gradient(180deg, #eef1f5, #d9dee6); }

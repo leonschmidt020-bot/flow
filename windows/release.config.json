@@ -1,0 +1,7 @@
+{
+  "//": "The ONE place for the update/release source. Replace owner/repo with the real GitHub repository.",
+  "provider": "github",
+  "owner": "leonschmidt020-bot",
+  "repo": "flow",
+  "homepage": "https://github.com/leonschmidt020-bot/flow"
+}

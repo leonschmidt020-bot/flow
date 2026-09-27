@@ -1,0 +1,18 @@
+# Allgemein
+.DS_Store
+*.log
+.env
+.env.*
+.dev.vars
+
+# macOS (mac/)
+mac/flow/.build/
+mac/flow/.swiftpm/
+mac/flow/.build-log.txt
+mac/flow/tests/last-release.txt
+mac/clipvault/clipvault
+mac/clipvault/sync-worker/node_modules/
+mac/clipvault/sync-worker/.wrangler/
+*.p12
+*.pem
+*.keychain-db

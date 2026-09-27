@@ -1,0 +1,7 @@
+# Absichtliche Test-Attrappen (Erkennung sensibler Inhalte, Sync-Testvektoren) – keine echten Schlüssel
+windows/src/clipvault/core/sensitive.test.ts:jwt:34
+windows/src/clipvault/core/sensitive.test.ts:aws-access-token:33
+windows/src/clipvault/core/sensitive.test.ts:private-key:29
+windows/src/clipvault/scripts/gen-sync-vectors.swift:generic-api-key:114
+windows/src/clipvault/test-fixtures/swift-sync-vectors.json:generic-api-key:38
+windows/src/clipvault/test-fixtures/swift-sync-vectors.json:generic-api-key:54

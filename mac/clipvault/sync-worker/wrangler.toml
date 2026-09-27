@@ -1,0 +1,18 @@
+# ClipVault Sync — Cloudflare Worker + ein SQLite-Durable-Object pro Tresor.
+# Der Server ist ein dummer, verschluesselter Speicher + Verteiler: er sieht nur AES-GCM-Chiffrate.
+# Pflicht nach dem ersten Deploy: `npx wrangler secret put INIT_SECRET` (siehe README.md).
+name = "flow-clipvault-sync"
+main = "src/index.ts"
+compatibility_date = "2025-09-01"
+workers_dev = true
+
+[[durable_objects.bindings]]
+name = "VAULT"
+class_name = "VaultDO"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["VaultDO"]
+
+[observability]
+enabled = false   # keine Request-Logs (enthalten ohnehin nur Chiffrat, aber sparsam bleiben)

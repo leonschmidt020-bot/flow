@@ -1,0 +1,191 @@
+{
+  "generated": "2026-09-26",
+  "source": "Bilder per Codex image generation; Logo-Geometrie aus Codex-Entwurf sauber nachgezeichnet (PIL); Wortmarken-Text mit SF Pro gesetzt",
+  "background_colors": {
+    "lilac": "#E9DDF7",
+    "peach": "#FBE3D2",
+    "mint": "#DDEFEA",
+    "butter": "#F8EDC6",
+    "logo": "#FBFAF7"
+  },
+  "files": [
+    {
+      "file": "logo_mark.png",
+      "name": "logo_mark",
+      "bytes": 54072,
+      "description": "App-Icon: Squircle #FBFAF7 (10 % transparenter Rand, weicher Schatten) mit 7 schwarzen Pill-Balken, deren Enden ein V bilden",
+      "width": 1024,
+      "height": 1024
+    },
+    {
+      "file": "logo_wordmark.png",
+      "name": "logo_wordmark",
+      "bytes": 39418,
+      "description": "Wortmarke transparent: Balken-V + \"Flow\" (SF Pro Semibold, #161616)",
+      "width": 1400,
+      "height": 360
+    },
+    {
+      "file": "banner_diktat.jpg",
+      "name": "banner_diktat",
+      "bytes": 259723,
+      "description": "Banner Diktat: Person diktiert nachts am Schreibtisch, Lampe amber + Fenster teal",
+      "width": 2400,
+      "height": 900
+    },
+    {
+      "file": "banner_notetaker.jpg",
+      "name": "banner_notetaker",
+      "bytes": 248151,
+      "description": "Banner Notetaker: Videocall am Laptop, Meetingraum hinter Glas, blau/warm",
+      "width": 2400,
+      "height": 900
+    },
+    {
+      "file": "banner_woerterbuch.jpg",
+      "name": "banner_woerterbuch",
+      "bytes": 193972,
+      "description": "Banner Woerterbuch: warme braune Bibliothek/Cafe mit Bokeh",
+      "width": 2400,
+      "height": 900
+    },
+    {
+      "file": "banner_snippets.jpg",
+      "name": "banner_snippets",
+      "bytes": 218170,
+      "description": "Banner Snippets: dunkelblaue Nacht, amber Stadt-Bokeh, Schreibtisch",
+      "width": 2400,
+      "height": 900
+    },
+    {
+      "file": "banner_stil.jpg",
+      "name": "banner_stil",
+      "bytes": 182306,
+      "description": "Banner Stil: Hand mit Smartphone und verschwommenen Chat-Bubbles, teal/erdig",
+      "width": 2400,
+      "height": 900
+    },
+    {
+      "file": "banner_transforms.jpg",
+      "name": "banner_transforms",
+      "bytes": 183542,
+      "description": "Banner Transforms: abstrakte goldene Lichtstreifen und fliegende Papierbahnen",
+      "width": 2400,
+      "height": 900
+    },
+    {
+      "file": "banner_scratchpad.jpg",
+      "name": "banner_scratchpad",
+      "bytes": 175002,
+      "description": "Banner Scratchpad: offenes Notizbuch mit Stift im warmen Abendlicht",
+      "width": 2400,
+      "height": 900
+    },
+    {
+      "file": "illu_willkommen.png",
+      "name": "illu_willkommen",
+      "bytes": 1414494,
+      "description": "Illustration Willkommen: Frau winkt neben grossem Mikrofon (lila)",
+      "width": 1024,
+      "height": 1024
+    },
+    {
+      "file": "illu_meeting_erkannt.png",
+      "name": "illu_meeting_erkannt",
+      "bytes": 1422784,
+      "description": "Illustration Meeting erkannt: Mann im Videocall am rosa Laptop (pfirsich)",
+      "width": 1024,
+      "height": 1024
+    },
+    {
+      "file": "illu_meeting_vorbei.png",
+      "name": "illu_meeting_vorbei",
+      "bytes": 1287623,
+      "description": "Illustration Meeting vorbei: Frau klappt Laptop zu, entspannt mit Kaffee (mint)",
+      "width": 1024,
+      "height": 1024
+    },
+    {
+      "file": "illu_wort_gelernt.png",
+      "name": "illu_wort_gelernt",
+      "bytes": 1379284,
+      "description": "Illustration Wort gelernt: Mann zeigt auf Wortkarte mit Funkel-Stern (butter)",
+      "width": 1024,
+      "height": 1024
+    },
+    {
+      "file": "illu_stimme.png",
+      "name": "illu_stimme",
+      "bytes": 1532295,
+      "description": "Illustration Stimme: Frau spricht, farbige Schallwellen (lila)",
+      "width": 1024,
+      "height": 1024
+    },
+    {
+      "file": "illu_mikrofon.png",
+      "name": "illu_mikrofon",
+      "bytes": 1439816,
+      "description": "Illustration Mikrofon: Mann ratlos vor stummgeschaltetem Mikrofon (pfirsich)",
+      "width": 1024,
+      "height": 1024
+    },
+    {
+      "file": "illu_snippet.png",
+      "name": "illu_snippet",
+      "bytes": 1402668,
+      "description": "Illustration Snippet: Frau zieht Notizkarte aus Schublade (mint)",
+      "width": 1024,
+      "height": 1024
+    },
+    {
+      "file": "illu_leer.png",
+      "name": "illu_leer",
+      "bytes": 1276824,
+      "description": "Illustration Leer: Mann entspannt, Fuesse auf leerem Tisch (butter)",
+      "width": 1024,
+      "height": 1024
+    },
+    {
+      "file": "illu_transforms.png",
+      "name": "illu_transforms",
+      "bytes": 1374494,
+      "description": "Illustration Transforms: Frau verwandelt Gekritzel per Zauberstab in saubere Zeilen (lila)",
+      "width": 1024,
+      "height": 1024
+    },
+    {
+      "file": "illu_scratchpad.png",
+      "name": "illu_scratchpad",
+      "bytes": 1499339,
+      "description": "Illustration Scratchpad: Mann schreibt im Spiralblock (pfirsich)",
+      "width": 1024,
+      "height": 1024
+    },
+    {
+      "file": "illu_insights.png",
+      "name": "illu_insights",
+      "bytes": 1370065,
+      "description": "Illustration Insights: Frau neben wachsendem Balkendiagramm (mint)",
+      "width": 1024,
+      "height": 1024
+    },
+    {
+      "file": "InstrumentSerif-Regular.ttf",
+      "name": "InstrumentSerif-Regular",
+      "bytes": 70012,
+      "description": "Schrift Instrument Serif Regular (OFL, google/fonts) fuer Banner-Headlines/grosse Zahlen"
+    },
+    {
+      "file": "InstrumentSerif-Italic.ttf",
+      "name": "InstrumentSerif-Italic",
+      "bytes": 71592,
+      "description": "Schrift Instrument Serif Italic (OFL) fuer das betonte Wort"
+    },
+    {
+      "file": "InstrumentSerif-OFL.txt",
+      "name": "InstrumentSerif-OFL",
+      "bytes": 4405,
+      "description": "SIL Open Font License 1.1 fuer Instrument Serif"
+    }
+  ]
+}

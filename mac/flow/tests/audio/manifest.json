@@ -1,0 +1,225 @@
+[
+ {
+  "id": "de_s1",
+  "file": "rec/de_s1.wav",
+  "lang": "de",
+  "voice": "Anna",
+  "rate": 185,
+  "truth": "Schick Okonkwo bitte die neue Liste.",
+  "names": [
+   "Okonkwo"
+  ],
+  "noisy": false,
+  "dur": 2.58
+ },
+ {
+  "id": "de_s2",
+  "file": "rec/de_s2.wav",
+  "lang": "de",
+  "voice": "Eddy (Deutsch (Deutschland))",
+  "rate": 195,
+  "truth": "Das Treffen mit Lumora ist am Dienstag um neun.",
+  "names": [
+   "Lumora"
+  ],
+  "noisy": true,
+  "dur": 3.57
+ },
+ {
+  "id": "de_s3",
+  "file": "rec/de_s3.wav",
+  "lang": "de",
+  "voice": "Flo (Deutsch (Deutschland))",
+  "rate": 205,
+  "truth": "Okay, passt so.",
+  "names": [],
+  "noisy": false,
+  "dur": 1.99
+ },
+ {
+  "id": "de_s4",
+  "file": "rec/de_s4.wav",
+  "lang": "de",
+  "voice": "Sandy (Deutsch (Deutschland))",
+  "rate": 180,
+  "truth": "Kannst du Frau Brenninkmeyer kurz zurückrufen?",
+  "names": [
+   "Brenninkmeyer"
+  ],
+  "noisy": true,
+  "dur": 3.89
+ },
+ {
+  "id": "de_s5",
+  "file": "rec/de_s5.wav",
+  "lang": "de",
+  "voice": "Anna",
+  "rate": 200,
+  "truth": "Wir fahren morgen früh nach Wolfenbüttel.",
+  "names": [
+   "Wolfenbüttel"
+  ],
+  "noisy": false,
+  "dur": 2.63
+ },
+ {
+  "id": "de_s6",
+  "file": "rec/de_s6.wav",
+  "lang": "de",
+  "voice": "Eddy (Deutsch (Deutschland))",
+  "rate": 175,
+  "truth": "Ja, mach das bitte so.",
+  "names": [],
+  "noisy": false,
+  "dur": 2.45
+ },
+ {
+  "id": "de_l1",
+  "file": "rec/de_l1.wav",
+  "lang": "de",
+  "voice": "Anna",
+  "rate": 180,
+  "truth": "Ich habe gestern mit Adebayo über das Budget von KiTaNet gesprochen, und wir brauchen bis Freitag eine neue Übersicht mit allen Stunden, damit Pierre Dufresne die Zahlen noch vor dem Wochenende prüfen kann.",
+  "names": [
+   "Adebayo",
+   "KiTaNet",
+   "Dufresne"
+  ],
+  "noisy": false,
+  "dur": 12.71
+ },
+ {
+  "id": "de_l2",
+  "file": "rec/de_l2.wav",
+  "lang": "de",
+  "voice": "Flo (Deutsch (Deutschland))",
+  "rate": 190,
+  "truth": "Heute Morgen war ich zuerst joggen, danach habe ich gefrühstückt und dann direkt mit der Arbeit angefangen, weil für das Projekt von Lumora noch einiges erledigt werden muss. Am Nachmittag kommt dann noch Besuch aus Wolfenbüttel.",
+  "names": [
+   "Lumora",
+   "Wolfenbüttel"
+  ],
+  "noisy": true,
+  "dur": 14.32
+ },
+ {
+  "id": "de_l3",
+  "file": "rec/de_l3.wav",
+  "lang": "de",
+  "voice": "Eddy (Deutsch (Deutschland))",
+  "rate": 185,
+  "truth": "Also für den neuen Bereich möchte ich, dass man die eigene Stimme einlernen kann und dass es mehrere Stufen gibt, sodass das System die Stimme mit der Zeit immer besser kennt. Außerdem soll Okonkwo die Texte noch einmal gegenlesen, bevor wir sie an Frau Brenninkmeyer schicken. Das wäre für mich wirklich wichtig.",
+  "names": [
+   "Okonkwo",
+   "Brenninkmeyer"
+  ],
+  "noisy": false,
+  "dur": 19.41
+ },
+ {
+  "id": "de_xl",
+  "file": "rec/de_xl.wav",
+  "lang": "de",
+  "voice": "Sandy (Deutsch (Deutschland))",
+  "rate": 175,
+  "truth": "Kurzes Update zum Projekt: Das Portal für KiTaNet ist seit heute Morgen online, und Adebayo hat die ersten Rückmeldungen schon gesammelt. Die meisten Eltern finden sich gut zurecht, nur die Anmeldung dauert noch zu lange. Pierre Dufresne schaut sich das morgen an. Danach schicken wir Frau Brenninkmeyer eine kurze Zusammenfassung, und am Freitag besprechen wir mit dem ganzen Team von Lumora, was als Nächstes kommt.",
+  "names": [
+   "KiTaNet",
+   "Adebayo",
+   "Dufresne",
+   "Brenninkmeyer",
+   "Lumora"
+  ],
+  "noisy": true,
+  "dur": 27.77
+ },
+ {
+  "id": "en_s1",
+  "file": "rec/en_s1.wav",
+  "lang": "en",
+  "voice": "Samantha",
+  "rate": 185,
+  "truth": "Send Okonkwo the updated budget.",
+  "names": [
+   "Okonkwo"
+  ],
+  "noisy": false,
+  "dur": 2.48
+ },
+ {
+  "id": "en_s2",
+  "file": "rec/en_s2.wav",
+  "lang": "en",
+  "voice": "Eddy (Englisch (USA))",
+  "rate": 195,
+  "truth": "Sounds good, thanks.",
+  "names": [],
+  "noisy": true,
+  "dur": 2.45
+ },
+ {
+  "id": "en_s3",
+  "file": "rec/en_s3.wav",
+  "lang": "en",
+  "voice": "Flo (Englisch (USA))",
+  "rate": 180,
+  "truth": "The Lumora team needs the report by Friday afternoon.",
+  "names": [
+   "Lumora"
+  ],
+  "noisy": false,
+  "dur": 4.36
+ },
+ {
+  "id": "en_s4",
+  "file": "rec/en_s4.wav",
+  "lang": "en",
+  "voice": "Samantha",
+  "rate": 200,
+  "truth": "Can you ask Adebayo to call me back?",
+  "names": [
+   "Adebayo"
+  ],
+  "noisy": true,
+  "dur": 2.49
+ },
+ {
+  "id": "en_l1",
+  "file": "rec/en_l1.wav",
+  "lang": "en",
+  "voice": "Eddy (Englisch (USA))",
+  "rate": 185,
+  "truth": "KiTaNet is building a new portal, and Pierre Dufresne wants weekly budget numbers with a short explanation for anything that goes over budget, so please send them before Thursday night.",
+  "names": [
+   "KiTaNet",
+   "Dufresne"
+  ],
+  "noisy": false,
+  "dur": 11.61
+ },
+ {
+  "id": "en_l2",
+  "file": "rec/en_l2.wav",
+  "lang": "en",
+  "voice": "Samantha",
+  "rate": 190,
+  "truth": "I think we should move the whole thing to local models, because the latency is much better and nothing ever leaves the laptop. Adebayo agrees, and Okonkwo wants to test it next week with the full team.",
+  "names": [
+   "Adebayo",
+   "Okonkwo"
+  ],
+  "noisy": true,
+  "dur": 10.82
+ },
+ {
+  "id": "en_l3",
+  "file": "rec/en_l3.wav",
+  "lang": "en",
+  "voice": "Flo (Englisch (USA))",
+  "rate": 175,
+  "truth": "The transcription should be faster without getting worse, so we benchmark every engine first and then decide which one to use for which clip. That way the short dictations feel instant, and the long ones stay accurate.",
+  "names": [],
+  "noisy": false,
+  "dur": 14.08
+ }
+]

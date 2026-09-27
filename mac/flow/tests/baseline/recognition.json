@@ -1,0 +1,181 @@
+{
+ "bench": {
+  "parakeet": {
+   "wer": 14.29,
+   "names": 17.39,
+   "p50": 39,
+   "p95": 115
+  },
+  "hybrid": {
+   "wer": 15.43,
+   "names": 69.57,
+   "p50": 619,
+   "p95": 866
+  }
+ },
+ "voicemask": {
+  "haupt: eigen own_de_mid.wav ganz": [
+   "unverändert",
+   "unverändert",
+   "unverändert",
+   "unverändert"
+  ],
+  "haupt: eigen own_de_mid.wav 3s": [
+   "unverändert",
+   "unverändert",
+   "unverändert",
+   "unverändert"
+  ],
+  "haupt: eigen+fremd own_de_mid.wav": [
+   "gestummt 1.4s",
+   "gestummt 1.4s",
+   "gestummt 1.6s",
+   "gestummt 1.6s"
+  ],
+  "haupt: eigen own_de_names.wav ganz": [
+   "unverändert",
+   "unverändert",
+   "unverändert",
+   "unverändert"
+  ],
+  "haupt: eigen own_de_names.wav 3s": [
+   "unverändert",
+   "unverändert",
+   "unverändert",
+   "unverändert"
+  ],
+  "haupt: eigen own_de_short.wav ganz": [
+   "unverändert",
+   "unverändert",
+   "unverändert",
+   "unverändert"
+  ],
+  "haupt: eigen own_de_short.wav 3s": [
+   "unverändert",
+   "unverändert",
+   "unverändert",
+   "unverändert"
+  ],
+  "haupt: eigen own_en_long.wav ganz": [
+   "unverändert",
+   "unverändert",
+   "unverändert",
+   "unverändert"
+  ],
+  "haupt: eigen own_en_long.wav 10s": [
+   "unverändert",
+   "unverändert",
+   "unverändert",
+   "unverändert"
+  ],
+  "haupt: eigen own_en_long.wav 3s": [
+   "unverändert",
+   "unverändert",
+   "unverändert",
+   "unverändert"
+  ],
+  "haupt: eigen+fremd own_en_long.wav": [
+   "gestummt 1.6s",
+   "gestummt 1.6s",
+   "gestummt 1.9s",
+   "gestummt 1.9s"
+  ],
+  "haupt: eigen lang": [
+   "unverändert",
+   "unverändert",
+   "unverändert",
+   "unverändert"
+  ],
+  "haupt: eigen lang+fremd im Rest": [
+   "gestummt 1.5s",
+   "gestummt 1.5s",
+   "gestummt 1.8s",
+   "gestummt 1.8s"
+  ],
+  "haupt: fremd allein": [
+   "nicht ich (0.47)",
+   "nicht ich (0.47)",
+   "nicht ich (0.47)",
+   "nicht ich (0.47)"
+  ],
+  "stuecke: eigen own_en_long.wav ganz": [
+   "unverändert",
+   "unverändert"
+  ],
+  "stuecke: eigen+fremd own_en_long.wav": [
+   "unverändert",
+   "unverändert"
+  ],
+  "stuecke: eigen lang": [
+   "unverändert",
+   "unverändert"
+  ],
+  "stuecke: eigen lang+fremd im Rest": [
+   "gestummt 1.6s",
+   "gestummt 1.9s"
+  ]
+ },
+ "dictation_sim": {
+  "own_de_short.wav": {
+   "neu_s": 0.06,
+   "alt_s": 0.05,
+   "chunks": 0,
+   "engines": "parakeet"
+  },
+  "own_de_names.wav": {
+   "neu_s": 0.73,
+   "alt_s": 0.7,
+   "chunks": 0,
+   "engines": "whisper"
+  },
+  "own_en_long.wav": {
+   "neu_s": 0.06,
+   "alt_s": 0.08,
+   "chunks": 2,
+   "engines": "parakeet,parakeet"
+  }
+ },
+ "hyps": {
+  "de_s1": "Schick Okonkwo bitte die neue Liste.",
+  "de_s2": "Das Treppen mit Rumora ist am Dienstag um 9.",
+  "de_s3": "Ok, Passo.",
+  "de_s4": "Kannst du auch nicht meine Kurscheinwürde?",
+  "de_s5": "Wir fahren morgen früh nach Wolfenbüttel.",
+  "de_s6": "Ja, mach das bitte so.",
+  "de_l1": "Ich habe gestern mit Adebayo über das Budget von KiTaNet gesprochen, und wir brauchen bis Freitag eine neue Übersicht mit allen Stunden, damit Pierre Dufresnne die Zahlen noch vor dem Wochenende prüfen kann.",
+  "de_l2": "Heute Morgen war ich zuerst Jürgen, danach habe ich gefrühstückt und dann direkt mit der Arbeit angefangen, weil für das Projekt von Lumora noch einiges erledigt werden muss. Am Nachmittag kommt dann noch Besuch aus Wohlreinbüttel.",
+  "de_l3": "Also für den neuen Bereich möchte ich, dass man die eigene Stimme einlernen kann und dass es mehrere Stufen gibt, sodass das System die Stimme mit der Zeit immer besser kennt. Außerdem soll Okonkwo die Texte noch einmal gegenlesen, bevor wir sie an Frau Brenninkmeyer schicken. Das wäre für mich wirklich wichtig.",
+  "de_xl": "Kurze Drucklage zum Projekt. Das Portal für KiTaNet ist seit heute Morgen online und Adebayo hat die ersten Rückmeldungen schon gesammelt. Die meisten Eltern finden sich gut zurecht, nur die Anmeldung dauert noch zu lange. Der Durchwesende schaut sich das Morgen an. Danach schicken wir drauf Brenninkmeyer eine kurze Zusammenfassung und am Freitag besprechen wir mit dem ganzen Team vom Lumora, was als nächstes kommt.",
+  "en_s1": "Send a Conquo the updated budget.",
+  "en_s2": "Sounds good, thanks.",
+  "en_s3": "The Lumora team needs the report by Friday afternoon.",
+  "en_s4": "Can you ask Ottavayo to call me back?",
+  "en_l1": "KiTaNet is building a new portal, and Pierre Dufresne wants weekly budget numbers with a short explanation for anything that goes over budget, so please send them before Thursday night.",
+  "en_l2": "Ich denke, wir müssen das ganze Modeln an, weil die Latenz ist viel besser und nichts mehr verlassen. Adebayo agrees, und Okonkwo möchte es nächste Woche mit der gesamten Team testen.",
+  "en_l3": "The transcription should be faster without getting worse, so we benchmark every engine first and then decide which one to use for which clip. That way the short dictations feel instant, and the long ones stay accurate."
+ },
+ "engines": {
+  "de_s1": "parakeet",
+  "de_s2": "whisper [wörterbuch:humor≈lumora]",
+  "de_s3": "whisper [mittel 0.86]",
+  "de_s4": "whisper [mittel 0.66]",
+  "de_s5": "parakeet",
+  "de_s6": "parakeet",
+  "de_l1": "whisper [wörterbuch:duffresne≈dufresne (Klang)]",
+  "de_l2": "whisper [mittel 0.89]",
+  "de_l3": "whisper [wörterbuch:brenningmeier≈brenninkmeyer]",
+  "de_xl": "whisper [mittel 0.86]",
+  "en_s1": "parakeet",
+  "en_s2": "parakeet",
+  "en_s3": "parakeet",
+  "en_s4": "parakeet",
+  "en_l1": "whisper [wort 0.18]",
+  "en_l2": "whisper [wörterbuch:autobio≈adebayo (Klang)]",
+  "en_l3": "parakeet"
+ },
+ "created": "2026-09-27 21:07",
+ "machine": "arm64 26.6.1",
+ "cpu": "Apple M4 Pro",
+ "git": "v1.7.16-dirty",
+ "note": "regeneriert (--rebaseline) – synthetisches TTS-Testset (macOS `say`, erfundene Namen), keine echten Aufnahmen; Latenzwerte gelten nur fuer diese Maschine"
+}

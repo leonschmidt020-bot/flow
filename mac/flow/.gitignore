@@ -1,0 +1,31 @@
+.build/
+.swiftpm/
+*.o
+.DS_Store
+Resources/icon_1024.png
+.build-log.txt
+
+# NIE persönliche Daten einchecken (die liegen in ~/.config/flow, nicht hier)
+settings*.json
+/token
+meine-stimme.json
+stimm-training.json
+wort-training.json
+verlauf.json
+statistik.json
+snippets.json
+transforms.json
+engine-aliases.json
+voices.json
+*.wav
+# Ausnahme: festes TTS-Testset des Release-Tors (keine echten Aufnahmen)
+!tests/audio/**/*.wav
+/meetings/
+/diktate/
+/training/
+*.p12
+*.pem
+*.keychain-db
+
+# Release-Tor: letzter Bericht (lokal)
+tests/last-release.txt

@@ -1,0 +1,45 @@
+{
+  "name": "flow",
+  "productName": "Flow",
+  "version": "0.1.0",
+  "description": "Flow – free, open-source, 100 % local voice dictation",
+  "license": "MIT",
+  "author": "Flow contributors",
+  "private": true,
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint src scripts test && tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:asr": "node scripts/build.mjs --scripts-only && node dist-scripts/test-asr.js",
+    "fixtures:tts": "node scripts/make-tts-fixtures.mjs",
+    "golden:mac": "python3 scripts/extract_mac_golden.py",
+    "dev": "npm run build && electron . --dev --no-hotkey",
+    "render": "npm run build && electron . --render-check=.cache/render",
+    "dist:win": "npm run build && electron-builder --config electron-builder.config.cjs --win --x64 --publish never",
+    "dist:mac": "npm run build && electron-builder --config electron-builder.config.cjs --mac --dir --publish never",
+    "icons": "node scripts/make-icons.mjs",
+    "dist:win:publish": "npm run build && electron-builder --config electron-builder.config.cjs --win --x64 --publish always",
+    "smoke": "npm run build && electron . --smoke=test/fixtures/asr/de_meeting.wav",
+    "dist:win:local": "node scripts/stage-win-natives.mjs && npm run dist:win"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9",
+    "koffi": "^3.3.2",
+    "sherpa-onnx-node": "^1.13.8",
+    "uiohook-napi": "^1.5.5"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@types/node": "^22.20.4",
+    "electron": "^44.4.5",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.28.2",
+    "eslint": "^9.39.5",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.70.1",
+    "vitest": "^5.0.2"
+  },
+  "homepage": "https://github.com/leonschmidt020-bot/flow"
+}

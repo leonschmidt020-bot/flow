@@ -1,0 +1,96 @@
+// UI strings – German first, English second. No dependency on Flow's i18n (api.t doesn't exist).
+const de = {
+  searchPlaceholder: 'Verlauf durchsuchen …',
+  history: 'Verlauf',
+  shared: 'Geteilt',
+  newCollection: 'Neuer Bereich',
+  all: 'Alle', text: 'Text', links: 'Links', images: 'Bilder', files: 'Dateien',
+  pinned: 'Angeheftet', today: 'Heute', yesterday: 'Gestern',
+  empty: 'Noch nichts kopiert',
+  emptyHint: 'Alles, was du mit Strg+C kopierst, landet hier – Text, Links, Bilder und Dateien. Zwei Tage lang, Angeheftetes für immer.',
+  noResults: 'Keine Treffer',
+  noResultsHint: 'Andere Suchwörter oder einen anderen Filter probieren.',
+  paste: 'Einfügen', copy: 'Kopieren', pin: 'Anheften', unpin: 'Lösen', delete: 'Löschen',
+  moveTo: 'In Bereich', removeFrom: 'Aus Bereich nehmen', showInExplorer: 'Im Explorer zeigen', saveAs: 'Speichern unter …',
+  share: 'Teilen', unshare: 'Nicht mehr teilen', download: 'Laden', openLink: 'Öffnen', more: 'Mehr',
+  openViewer: 'Groß ansehen', close: 'Schließen', zoomIn: 'Vergrößern', zoomOut: 'Verkleinern', fit: 'Einpassen',
+  hidden: 'Verborgen', reveal: 'Anzeigen', expiresIn: 'läuft in {0} Std ab', noExpiry: 'läuft nicht ab',
+  chars: 'Zeichen', edited: 'Bearbeitet', text_detected: 'Text im Bild',
+  hintNav: '↑↓ Auswahl', hintPaste: '↵ Einfügen', hintCopy: 'Strg+C Kopieren', hintPin: 'Strg+P Anheften', hintDel: 'Entf Löschen', hintView: 'Leertaste Ansehen', hintEsc: 'Esc Schließen',
+  openHub: 'Im Hub öffnen',
+  settings: 'Einstellungen',
+  entries: '{0} Einträge', entry: '1 Eintrag',
+  // hub
+  hubTitle: 'ClipVault', hubSubtitle: 'Zwischenablage-Verlauf – lokal auf diesem PC',
+  sEncrypt: 'Verlauf verschlüsseln (Windows DPAPI)', sEncryptHint: 'Verlauf und Geteiltes werden mit deinem Windows-Konto verschlüsselt. Nur du auf diesem PC kannst sie lesen.',
+  sEncryptNA: 'Auf diesem System nicht verfügbar.',
+  sPasswords: 'Passwort-ähnliche Texte nicht speichern', sPasswordsHint: 'Passwortmanager werden immer übersprungen. Dies erkennt zusätzlich zufällig aussehende Zeichenketten.',
+  sPaste: 'Enter fügt direkt ein', sPasteHint: 'Sonst kopiert Enter nur.',
+  sPause: 'Aufnahme pausieren', sRetention: 'Aufbewahrung', sDays: 'Tage', sMax: 'Einträge max.', sQuota: 'Speicher max. (MB)',
+  sHotkey: 'Tastenkürzel', sClear: 'Verlauf leeren', sClearConfirm: 'Wirklich den ganzen Verlauf löschen? Angeheftetes und Bereiche bleiben.',
+  sIgnored: 'Apps ignorieren (z. B. KeePass.exe, eine pro Zeile)',
+  sync: 'Teilen & Sync', syncOffHint: 'Aus. Ende-zu-Ende verschlüsselt über deinen eigenen Cloudflare-Worker, kompatibel mit ClipVault auf dem Mac.',
+  syncEnable: 'Sync einschalten', syncUrl: 'Worker-URL', syncUrlPh: 'https://clipvault-sync.<konto>.workers.dev', syncSave: 'Speichern',
+  syncName: 'Mein Name (für den Partner)', syncPairCreate: 'Kopplungscode erzeugen', syncPairJoin: 'Mit Code koppeln', syncCodePh: 'cvpair1.…',
+  syncUnpair: 'Trennen', syncPaired: 'Gekoppelt', syncNewVault: 'Neuen geteilten Tresor anlegen', syncCancel: 'Code zurückziehen', syncCodeHint: 'Nur privat weitergeben – der Code enthält den Tresor-Schlüssel. 15 Minuten gültig.',
+  st_off: 'aus', st_unconfigured: 'nicht eingerichtet', st_unpaired: 'nicht gekoppelt', st_pairing: 'wartet auf Partner', st_waiting: 'verbunden, Partner fehlt noch',
+  st_connecting: 'verbinde …', st_connected: 'verbunden (live)', st_offline: 'offline',
+  queue: '{0} warten auf Sync',
+  secretCollection: 'Geheim (24 h, verborgen)',
+  rename: 'Umbenennen', deleteCollection: 'Bereich löschen', collectionName: 'Name des Bereichs',
+  recovery: 'Der Verlauf war beschädigt und wurde aus der Sicherheitskopie wiederhergestellt.',
+  readOnly: 'Der Verlauf ist verschlüsselt und kann hier nicht gelesen werden (anderes Windows-Konto?). Nichts wird überschrieben.',
+  // toasts (main)
+  copied: 'Kopiert', copiedPasteManually: 'Kopiert – mit Strg+V einfügen', saved: 'Gespeichert', loading: 'Wird geladen …',
+  shared_ok: 'Geteilt', sharedFrom: '{0} hat etwas geteilt', syncOff: 'Sync ist aus (Hub → ClipVault → Teilen & Sync)',
+  syncNoSecretStore: 'Sync braucht einen sicheren Schlüsselspeicher – hier nicht verfügbar',
+};
+
+type Keys = keyof typeof de;
+
+const en: Record<Keys, string> = {
+  searchPlaceholder: 'Search history …',
+  history: 'History', shared: 'Shared', newCollection: 'New collection',
+  all: 'All', text: 'Text', links: 'Links', images: 'Images', files: 'Files',
+  pinned: 'Pinned', today: 'Today', yesterday: 'Yesterday',
+  empty: 'Nothing copied yet', emptyHint: 'Everything you copy with Ctrl+C lands here – text, links, images and files. Kept for two days, pinned items forever.',
+  noResults: 'No matches', noResultsHint: 'Try other words or another filter.',
+  paste: 'Paste', copy: 'Copy', pin: 'Pin', unpin: 'Unpin', delete: 'Delete',
+  moveTo: 'Move to', removeFrom: 'Remove from collection', showInExplorer: 'Show in Explorer', saveAs: 'Save as …',
+  share: 'Share', unshare: 'Stop sharing', download: 'Download', openLink: 'Open', more: 'More',
+  openViewer: 'View large', close: 'Close', zoomIn: 'Zoom in', zoomOut: 'Zoom out', fit: 'Fit',
+  hidden: 'Hidden', reveal: 'Reveal', expiresIn: 'expires in {0} h', noExpiry: 'never expires',
+  chars: 'chars', edited: 'Edited', text_detected: 'Text in image',
+  hintNav: '↑↓ Select', hintPaste: '↵ Paste', hintCopy: 'Ctrl+C Copy', hintPin: 'Ctrl+P Pin', hintDel: 'Del Delete', hintView: 'Space View', hintEsc: 'Esc Close',
+  openHub: 'Open in Hub', settings: 'Settings', entries: '{0} entries', entry: '1 entry',
+  hubTitle: 'ClipVault', hubSubtitle: 'Clipboard history – stored on this PC',
+  sEncrypt: 'Encrypt history (Windows DPAPI)', sEncryptHint: 'History and shared items are encrypted with your Windows account. Only you on this PC can read them.',
+  sEncryptNA: 'Not available on this system.',
+  sPasswords: 'Don’t store password-like text', sPasswordsHint: 'Password managers are always skipped. This also catches random-looking strings.',
+  sPaste: 'Enter pastes directly', sPasteHint: 'Otherwise Enter only copies.',
+  sPause: 'Pause capturing', sRetention: 'Retention', sDays: 'days', sMax: 'max. entries', sQuota: 'max. storage (MB)',
+  sHotkey: 'Shortcut', sClear: 'Clear history', sClearConfirm: 'Really delete the whole history? Pinned items and collections stay.',
+  sIgnored: 'Ignore apps (e.g. KeePass.exe, one per line)',
+  sync: 'Sharing & sync', syncOffHint: 'Off. End-to-end encrypted through your own Cloudflare Worker, compatible with ClipVault on the Mac.',
+  syncEnable: 'Turn on sync', syncUrl: 'Worker URL', syncUrlPh: 'https://clipvault-sync.<account>.workers.dev', syncSave: 'Save',
+  syncName: 'My name (shown to the partner)', syncPairCreate: 'Create pairing code', syncPairJoin: 'Pair with code', syncCodePh: 'cvpair1.…',
+  syncUnpair: 'Unpair', syncPaired: 'Paired', syncNewVault: 'Create a new shared vault', syncCancel: 'Withdraw code', syncCodeHint: 'Share privately only – the code contains the vault key. Valid for 15 minutes.',
+  st_off: 'off', st_unconfigured: 'not set up', st_unpaired: 'not paired', st_pairing: 'waiting for partner', st_waiting: 'connected, partner missing',
+  st_connecting: 'connecting …', st_connected: 'connected (live)', st_offline: 'offline',
+  queue: '{0} waiting for sync',
+  secretCollection: 'Secret (24 h, hidden)',
+  rename: 'Rename', deleteCollection: 'Delete collection', collectionName: 'Collection name',
+  recovery: 'The history was damaged and has been restored from the backup copy.',
+  readOnly: 'The history is encrypted and can’t be read here (other Windows account?). Nothing will be overwritten.',
+  copied: 'Copied', copiedPasteManually: 'Copied – paste with Ctrl+V', saved: 'Saved', loading: 'Loading …',
+  shared_ok: 'Shared', sharedFrom: '{0} shared something', syncOff: 'Sync is off (Hub → ClipVault → Sharing & sync)',
+  syncNoSecretStore: 'Sync needs a secure key store – not available here',
+};
+
+export type StringKey = Keys;
+
+export function tr(locale: 'de' | 'en', key: Keys, ...args: (string | number)[]): string {
+  let s = (locale === 'en' ? en : de)[key] ?? de[key] ?? key;
+  args.forEach((a, i) => { s = s.replace(`{${i}}`, String(a)); });
+  return s;
+}

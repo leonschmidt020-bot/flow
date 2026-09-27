@@ -1,4 +1,5 @@
 // Offscreen render check: draws pill + hub states into PNGs without showing any window.
+import { hardExit } from './hardExit';
 import { app, BrowserWindow } from 'electron';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -53,5 +54,5 @@ export async function runRenderCheck(outDir: string) {
     console.log('rendered', f);
   }
   for (const w of wins.values()) w.destroy();
-  app.exit(0);
+  hardExit(0);
 }

@@ -1,6 +1,7 @@
 // Flow – main process entry.
 //   flags: --no-hotkey (never install the global keyboard hook / shortcuts), --hidden (autostart),
 //          --dev (open hub), --render-check=<dir> (offscreen PNGs, then quit), --smoke=<wav> (end-to-end self test, then quit)
+import { hardExit } from './hardExit';
 import { app, BrowserWindow, clipboard, ipcMain, session, shell, systemPreferences, globalShortcut } from 'electron';
 import path from 'node:path';
 import os from 'node:os';
@@ -273,7 +274,7 @@ async function main() {
       tray.destroy();
       pill.destroy();
       mic.destroy();
-      app.exit(0);
+      hardExit(0);
     })();
   });
 
@@ -286,7 +287,7 @@ async function main() {
 /** End-to-end self test without mic/hotkey/clipboard: WAV → ASR → pipeline → (no-op paste) → history → hub. */
 async function smoke(wav: string, x: { asr: AsrService; dictation: Dictation; history: History; getHub: () => BrowserWindow | null; openHub: () => void }) {
   const out = process.env.FLOW_SMOKE_OUT ?? path.join(process.cwd(), '.cache', 'render');
-  const fail = (m: string) => { console.error('SMOKE FAIL:', m); app.exit(1); };
+  const fail = (m: string) => { console.error('SMOKE FAIL:', m); hardExit(1); };
   const deadline = Date.now() + 120_000;
   while (!x.asr.ready) {
     if (Date.now() > deadline || x.asr.state.status === 'error' || x.asr.state.status === 'missing') return fail(`asr not ready (${x.asr.state.status} ${x.asr.state.error})`);
@@ -309,5 +310,6 @@ async function smoke(wav: string, x: { asr: AsrService; dictation: Dictation; hi
   mkdirSync(out, { recursive: true });
   writeFileSync(path.join(out, 'smoke_hub.png'), img.toPNG());
   console.log('SMOKE OK', rec.text.length, 'chars, hub items:', ready);
-  app.exit(0);
+  x.asr.dispose();
+  hardExit(0);
 }

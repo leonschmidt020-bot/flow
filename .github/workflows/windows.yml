@@ -60,6 +60,7 @@ jobs:
         run: npm run build
 
       - name: Smoke test (Electron main + ASR + hub, no hotkey/mic/clipboard)
+        timeout-minutes: 6
         shell: pwsh
         run: |
           $env:FLOW_MODEL_DIR = "$env:FLOW_MODEL_CACHE"

@@ -26,6 +26,8 @@ import { initUpdater, checkForUpdates, scheduleUpdates } from './updater';
 import { initClipVault } from '../clipvault/main';
 import type { ClipVaultHandle, FlowClipboardWrite } from '../clipvault/contract';
 import { runRenderCheck } from './renderCheck';
+import { initMeeting, type MeetingHandle } from '../meeting/main';
+import { applyRules } from '../core/textCleaner';
 
 const argv = process.argv.slice(1);
 const flag = (n: string) => argv.includes(`--${n}`) || argv.some((a) => a.startsWith(`--${n}=`));
@@ -65,7 +67,7 @@ async function main() {
 
   // mic permission only for our own pages
   const ours = (url: string) => url.startsWith('file://');
-  session.defaultSession.setPermissionRequestHandler((wc, perm, cb) => cb(perm === 'media' && ours(wc.getURL())));
+  session.defaultSession.setPermissionRequestHandler((wc, perm, cb) => cb((perm === 'media' || perm === 'display-capture') && ours(wc.getURL())));
   session.defaultSession.setPermissionCheckHandler((wc, perm) => perm === 'media' && !!wc && ours(wc.getURL()));
 
   // ── services ──
@@ -154,7 +156,12 @@ async function main() {
     pushState();
   });
   mic.on('started', () => { if (micError) { micError = ''; pushState(); } });
-  pill.onClick = (what) => { if (what === 'stop') void dictation.stop(); else { dictation.cancel(); hotkeys?.machine.forceIdle(); } };
+  let meeting: MeetingHandle | null = null;
+  pill.onClick = (what) => {
+    if (meeting?.pillClick(what)) return;
+    if (what === 'stop') void dictation.stop(); else if (what === 'cancel') { dictation.cancel(); hotkeys?.machine.forceIdle(); }
+  };
+  pill.onDrop = (files) => meeting?.importFiles(files);
 
   if (!NO_HOTKEY) {
     hotkeys = new HotkeyService(settings.hotkey, {
@@ -217,6 +224,41 @@ async function main() {
   });
   if (!flag('smoke')) { tray.create(); tray.update(settings.locale, settings.hotkey, paused); }
 
+  // ── notetaker (src/meeting) ──
+  try {
+    meeting = initMeeting({
+      userData: paths.userData, modelsRoot: paths.models, preloadPath: paths.preload('meetingCapture'), capturePage: paths.renderer('meeting', 'capture.html'),
+      noHotkey: NO_HOTKEY, locale: () => settings.locale, micDeviceId: () => settings.micDeviceId,
+      clean: (text) => applyRules(text, { removeFillers: settings.removeFillers, voiceCommands: false, dictionary: settings.dictionary }),
+      asr: () => asr.getEngine(),
+      waitAsr: () => new Promise((resolve, reject) => {
+        const e = asr.getEngine();
+        if (e) return resolve(e);
+        if (asr.state.status === 'missing') void asr.start(settings.engine, true);
+        const onReady = () => { asr.off('ready', onReady); resolve(asr.getEngine()!); };
+        asr.on('ready', onReady);
+        setTimeout(() => { asr.off('ready', onReady); if (!asr.getEngine()) reject(new Error(t(settings.locale, 'toastNoModel'))); }, 30 * 60_000).unref?.();
+      }),
+      // like the hub's copy button: the real clipboard only on Windows (dev runs elsewhere stay in memory)
+      copyText: (text) => (IS_WIN && !flag('smoke') ? clipboard.writeText(text) : clip.writeText(text)),
+      pill: {
+        meeting: (m) => pill.state({ meeting: m }),
+        task: (x) => pill.state({ task: x }),
+        card: (c) => pill.state({ card: c }),
+        toast: (text, kind, ms) => pill.toast(text, kind, ms),
+        level: (lv) => { if (dictation.state === 'idle') pill.level(lv); },
+      },
+      openHub: (page) => openHub(page),
+      hubs: () => (hub && !hub.isDestroyed() ? [hub] : []),
+      log: (...a) => log('[meeting]', ...a),
+      onTrayChange: () => tray.update(settings.locale, settings.hotkey, paused),
+    });
+    tray.extraItems = () => meeting?.trayItems() ?? [];
+    tray.update(settings.locale, settings.hotkey, paused);
+  } catch (e) {
+    log('notetaker init failed', e);
+  }
+
   // ── settings side effects ──
   const applySystem = () => {
     if (app.isPackaged && IS_WIN) app.setLoginItemSettings({ openAtLogin: settings.startWithWindows, args: ['--hidden'] });
@@ -268,6 +310,7 @@ async function main() {
       hotkeys?.stop();
       globalShortcut.unregisterAll();
       try { await cv?.dispose(); } catch (err) { log('clipvault dispose', err); }
+      try { await meeting?.dispose(); } catch (err) { log('notetaker dispose', err); }
       settingsFile.flush();
       history.flush();
       asr.dispose();
@@ -281,11 +324,11 @@ async function main() {
   const showHub = flag('dev') || firstRun || (!flag('hidden') && !flag('smoke'));
   if (showHub) openHub();
 
-  if (flag('smoke')) await smoke(flagValue('smoke') ?? '', { asr, dictation, history, getHub: () => hub, openHub });
+  if (flag('smoke')) await smoke(flagValue('smoke') ?? '', { asr, dictation, history, getHub: () => hub, openHub, meeting });
 }
 
 /** End-to-end self test without mic/hotkey/clipboard: WAV → ASR → pipeline → (no-op paste) → history → hub. */
-async function smoke(wav: string, x: { asr: AsrService; dictation: Dictation; history: History; getHub: () => BrowserWindow | null; openHub: () => void }) {
+async function smoke(wav: string, x: { asr: AsrService; dictation: Dictation; history: History; getHub: () => BrowserWindow | null; openHub: () => void; meeting: MeetingHandle | null }) {
   const out = process.env.FLOW_SMOKE_OUT ?? path.join(process.cwd(), '.cache', 'render');
   const fail = (m: string) => { console.error('SMOKE FAIL:', m); hardExit(1); };
   const deadline = Date.now() + 120_000;
@@ -310,6 +353,13 @@ async function smoke(wav: string, x: { asr: AsrService; dictation: Dictation; hi
   mkdirSync(out, { recursive: true });
   writeFileSync(path.join(out, 'smoke_hub.png'), img.toPNG());
   console.log('SMOKE OK', rec.text.length, 'chars, hub items:', ready);
+  // --meeting-selftest=<audio file>: notetaker import through the real app (decoder, ASR, diarization, hub page)
+  const mfile = flagValue('meeting-selftest');
+  if (mfile && x.meeting) {
+    const { meetingSelfTest } = require('../meeting/main') as typeof import('../meeting/main');
+    const r = await meetingSelfTest(x.meeting, mfile, hub, out);
+    if (!r.ok) return fail('meeting: ' + r.error);
+  }
   x.asr.dispose();
   hardExit(0);
 }

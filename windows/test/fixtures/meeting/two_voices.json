@@ -1,0 +1,63 @@
+{
+ "generator": "macOS say + afconvert (16 kHz mono PCM16), scripts/make-meeting-fixture.mjs",
+ "durationSec": 46.359,
+ "speakers": 2,
+ "turns": [
+  {
+   "speaker": "A",
+   "voice": "Anna",
+   "start": 0.5,
+   "end": 6.095,
+   "text": "Guten Morgen zusammen. Heute sprechen wir über den Umzug des Büros und den neuen Zeitplan."
+  },
+  {
+   "speaker": "B",
+   "voice": "Reed (Deutsch (Deutschland))",
+   "start": 6.795,
+   "end": 13.672,
+   "text": "Danke. Der Umzug ist für den zwölften Oktober geplant, die Kisten kommen eine Woche vorher."
+  },
+  {
+   "speaker": "A",
+   "voice": "Anna",
+   "start": 14.372,
+   "end": 18.483,
+   "text": "Gut. Wer kümmert sich um die Drucker und das Netzwerk im neuen Gebäude?"
+  },
+  {
+   "speaker": "B",
+   "voice": "Reed (Deutsch (Deutschland))",
+   "start": 19.183,
+   "end": 24.38,
+   "text": "Das übernimmt das Technikteam. Die Leitungen werden am Montag geprüft."
+  },
+  {
+   "speaker": "A",
+   "voice": "Anna",
+   "start": 25.08,
+   "end": 28.515,
+   "text": "Und wie sieht es mit den Kosten aus? Bleiben wir im Budget?"
+  },
+  {
+   "speaker": "B",
+   "voice": "Reed (Deutsch (Deutschland))",
+   "start": 29.215,
+   "end": 34.925,
+   "text": "Ja, wir liegen etwa fünf Prozent unter der Planung, weil die Möbel günstiger waren."
+  },
+  {
+   "speaker": "A",
+   "voice": "Anna",
+   "start": 35.625,
+   "end": 40.631,
+   "text": "Sehr schön. Dann schicke ich heute Nachmittag die Einladung für die nächste Besprechung."
+  },
+  {
+   "speaker": "B",
+   "voice": "Reed (Deutsch (Deutschland))",
+   "start": 41.331,
+   "end": 45.66,
+   "text": "Perfekt, bis dahin sammle ich die offenen Fragen aus dem Team."
+  }
+ ]
+}

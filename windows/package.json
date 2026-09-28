@@ -13,6 +13,8 @@
     "lint": "eslint src scripts test && tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:asr": "node scripts/build.mjs --scripts-only && node dist-scripts/test-asr.js",
+    "test:meeting": "node scripts/build.mjs --scripts-only && node dist-scripts/test-meeting.js",
+    "fixtures:meeting": "node scripts/make-meeting-fixture.mjs",
     "fixtures:tts": "node scripts/make-tts-fixtures.mjs",
     "golden:mac": "python3 scripts/extract_mac_golden.py",
     "dev": "npm run build && electron . --dev --no-hotkey",
@@ -22,6 +24,7 @@
     "icons": "node scripts/make-icons.mjs",
     "dist:win:publish": "npm run build && electron-builder --config electron-builder.config.cjs --win --x64 --publish always",
     "smoke": "npm run build && electron . --smoke=test/fixtures/asr/de_meeting.wav",
+    "smoke:meeting": "npm run build && electron . --smoke=test/fixtures/asr/de_meeting.wav --meeting-selftest=test/fixtures/meeting/two_voices.m4a",
     "dist:win:local": "node scripts/stage-win-natives.mjs && npm run dist:win"
   },
   "dependencies": {

@@ -1,4 +1,4 @@
-import { Menu, Tray, nativeImage } from 'electron';
+import { Menu, Tray, nativeImage, type MenuItemConstructorOptions } from 'electron';
 import { paths } from './paths';
 import { t, hotkeyShort, type Locale } from '../shared/i18n';
 
@@ -6,6 +6,8 @@ export interface TrayActions { openHub(): void; openClipVault(): void; togglePau
 
 export class FlowTray {
   private tray: Tray | null = null;
+  /** extra entries (notetaker: record/stop meeting, open notetaker) */
+  extraItems: () => MenuItemConstructorOptions[] = () => [];
   constructor(private a: TrayActions) {}
   create() {
     if (process.platform === 'win32') {
@@ -23,6 +25,8 @@ export class FlowTray {
     this.tray.setContextMenu(Menu.buildFromTemplate([
       { label: t(locale, 'trayOpen'), click: () => this.a.openHub() },
       { label: t(locale, 'trayClipVault'), click: () => this.a.openClipVault() },
+      { type: 'separator' },
+      ...this.extraItems(),
       { type: 'separator' },
       { label: t(locale, 'trayHotkey', { hotkey: hotkeyShort(locale, hotkey) }), enabled: false },
       { label: paused ? t(locale, 'resume') : t(locale, 'pause'), click: () => this.a.togglePause() },

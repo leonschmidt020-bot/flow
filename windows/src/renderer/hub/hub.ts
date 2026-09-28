@@ -4,6 +4,9 @@ import type { HubState, HistoryItem } from '../../shared/hubState';
 import { HOTKEYS, type Settings } from '../../shared/settings';
 import { mount as mountClipVault } from '../../clipvault/ui';
 import { demoState } from './demo';
+import { notetakerPage, NOTETAKER_ICON, type MeetingApi } from './notetaker';
+import { demoMeetingApi } from './notetakerDemo';
+import { mt } from '../../meeting/i18n';
 
 interface FlowApi {
   getState(): Promise<HubState>;
@@ -20,13 +23,14 @@ interface FlowApi {
   onLevel(cb: (lv: number) => void): () => void;
   onNavigate(cb: (p: string) => void): () => void;
   clipvault: { invoke(name: string, ...a: unknown[]): Promise<unknown>; on(name: string, cb: (p: unknown) => void): () => void };
+  meeting?: MeetingApi;
 }
 const q = new URLSearchParams(location.search);
 const RENDER = q.has('render');
 const api: FlowApi = (window as unknown as { flow?: FlowApi }).flow ?? mockApi();
 
 let S: HubState;
-type Page = 'history' | 'dictionary' | 'clipvault' | 'settings';
+type Page = 'history' | 'notetaker' | 'dictionary' | 'clipvault' | 'settings';
 let page: Page = (q.get('page') as Page) || 'history';
 const L = () => S.settings.locale;
 const t = (k: I18nKey, v?: Record<string, string | number>) => tr(L(), k, v);
@@ -59,14 +63,15 @@ const I = {
   trash: '<path d="M4.5 7h15M10 11v6M14 11v6M6.5 7l.8 11.2A2 2 0 0 0 9.3 20h5.4a2 2 0 0 0 2-1.8L17.5 7M9.5 7V5.2A1.2 1.2 0 0 1 10.7 4h2.6a1.2 1.2 0 0 1 1.2 1.2V7"/>',
   search: '<circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
+  notetaker: NOTETAKER_ICON,
 };
 
 // ── sidebar ──
 function renderNav() {
   const nav = document.getElementById('nav')!;
-  nav.replaceChildren(...(['history', 'dictionary', 'clipvault', 'settings'] as Page[]).map((p) =>
+  nav.replaceChildren(...(['history', 'notetaker', 'dictionary', 'clipvault', 'settings'] as Page[]).map((p) =>
     h('button', { class: 'nav-item' + (p === page ? ' active' : ''), on: { click: () => go(p) } }, svg(I[p]),
-      t(p === 'history' ? 'navHistory' : p === 'dictionary' ? 'navDictionary' : p === 'clipvault' ? 'navClipVault' : 'navSettings'))));
+      p === 'notetaker' ? mt(L(), 'nav') : t(p === 'history' ? 'navHistory' : p === 'dictionary' ? 'navDictionary' : p === 'clipvault' ? 'navClipVault' : 'navSettings'))));
 }
 
 function asrLine(): { text: string; sub: string; dot: string; progress: number | null } {
@@ -288,10 +293,18 @@ function clipVaultPage(): PageView {
   return { el: host, update() {}, dispose: () => unmount?.() };
 }
 
+const meetingApi: MeetingApi = api.meeting ?? demoMeetingApi(q.get('mstate') ?? 'ready');
+let meetingSelect: string | null = q.get('select');
+function meetingPage(): PageView {
+  const v = notetakerPage({ api: meetingApi, loc: L, hotkeysDisabled: S.hotkeysDisabled, toast: () => {}, initialSelect: meetingSelect, render: RENDER });
+  meetingSelect = null;
+  return v;
+}
+
 function go(p: Page) {
   view?.dispose?.();
   page = p;
-  view = p === 'history' ? historyPage() : p === 'dictionary' ? dictionaryPage() : p === 'clipvault' ? clipVaultPage() : settingsPage();
+  view = p === 'history' ? historyPage() : p === 'notetaker' ? meetingPage() : p === 'dictionary' ? dictionaryPage() : p === 'clipvault' ? clipVaultPage() : settingsPage();
   const box = document.getElementById('page')!;
   box.replaceChildren(view.el);
   box.scrollTop = 0;
@@ -315,8 +328,14 @@ function mockApi(): FlowApi {
 (async () => {
   S = await api.getState();
   api.onState((s) => { const localeChanged = s.settings.locale !== S?.settings.locale; S = s; if (localeChanged) go(page); else refresh(); });
-  api.onNavigate((p) => go(p as Page));
+  api.onNavigate((p) => {
+    // "notetaker:<id>" selects a meeting
+    const [pg, id] = String(p).split(':');
+    if (id) meetingSelect = id;
+    go(pg as Page);
+  });
   go(page);
-  if (q.get('scroll')) document.getElementById('page')!.scrollTop = Number(q.get('scroll'));
+  // pages that load their data asynchronously (notetaker) need a moment before the render check scrolls
+  if (q.get('scroll')) setTimeout(() => { document.getElementById('page')!.scrollTop = Number(q.get('scroll')); }, page === 'notetaker' ? 500 : 0);
   document.body.dataset.ready = '1';
 })();

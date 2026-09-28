@@ -48,6 +48,19 @@ export async function runRenderCheck(outDir: string) {
     ['hub_settings_micerror.png', hub('page=settings&state=micerror'), 1080, 740, 900],
     ['hub_clipvault.png', hub('page=clipvault&state=ready'), 1080, 740, 1200],
     ['hub_history_narrow.png', hub('page=history&state=ready'), 820, 560, 900],
+    // notetaker
+    ['pill_meeting.png', pill('mode=idle&meeting=723'), 460, 150, 700],
+    ['pill_meeting_card.png', pill('mode=idle&card=' + encodeURIComponent('Microsoft Teams erkannt|Meeting aufnehmen?|Aufnehmen|Nicht jetzt')), 460, 150, 700],
+    ['pill_meeting_toast.png', pill('mode=idle&meeting=1&toast=' + encodeURIComponent('Prompt kopiert ✓') + '&kind=success'), 460, 150, 700],
+    ['pill_import.png', pill('mode=idle&task=' + encodeURIComponent('Audiodatei · 62 %') + '&p=0.62'), 460, 150, 600],
+    ['pill_drop.png', pill('mode=idle&drag=1'), 460, 150, 600],
+    ['hub_notetaker.png', hub('page=notetaker&state=ready&mstate=ready'), 1080, 740, 1100],
+    ['hub_notetaker_recording.png', hub('page=notetaker&state=ready&mstate=recording'), 1080, 740, 1100],
+    ['hub_notetaker_processing.png', hub('page=notetaker&state=ready&mstate=ready&select=m2'), 1080, 740, 1100],
+    ['hub_notetaker_empty.png', hub('page=notetaker&state=ready&mstate=empty'), 1080, 740, 1100],
+    ['hub_notetaker_en.png', hub('page=notetaker&state=ready&mstate=ready&lang=en&select=m3'), 1080, 740, 1100],
+    ['hub_notetaker_settings.png', hub('page=notetaker&state=ready&mstate=ready&scroll=2000'), 1080, 740, 1100],
+    ['hub_notetaker_narrow.png', hub('page=notetaker&state=ready&mstate=ready'), 820, 560, 1100],
   ];
   for (const [f, url, w, h, ms] of jobs) {
     await shot(path.join(outDir, f), url, w, h, ms);

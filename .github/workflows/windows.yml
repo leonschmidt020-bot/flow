@@ -51,21 +51,25 @@ jobs:
         uses: actions/cache@v4
         with:
           path: windows/.cache/models
-          key: flow-models-${{ runner.os }}-${{ hashFiles('windows/src/asr/models.ts') }}
+          key: flow-models-${{ runner.os }}-${{ hashFiles('windows/src/asr/models.ts', 'windows/src/meeting/diarizer.ts') }}
 
       - name: ASR test (Parakeet v3, synthetic DE/EN speech)
         run: npm run test:asr
 
+      - name: Notetaker test (Parakeet + sherpa-onnx diarization, synthetic two-voice meeting)
+        run: npm run test:meeting
+
       - name: Build app
         run: npm run build
 
-      - name: Smoke test (Electron main + ASR + hub, no hotkey/mic/clipboard)
+      - name: Smoke test (Electron main + ASR + hub + notetaker import, no hotkey/mic/clipboard)
         timeout-minutes: 6
         shell: pwsh
         run: |
           $env:FLOW_MODEL_DIR = "$env:FLOW_MODEL_CACHE"
           $env:FLOW_SMOKE_OUT = "$PWD\.cache\render"
-          npx electron . --smoke=test/fixtures/asr/de_meeting.wav
+          $env:FLOW_NO_FFMPEG = "1"   # exercise Electron's built-in decoder for the m4a import
+          npx electron . --smoke=test/fixtures/asr/de_meeting.wav --meeting-selftest=test/fixtures/meeting/two_voices.m4a
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Render check (offscreen PNGs)
@@ -99,6 +103,7 @@ jobs:
           path: |
             windows/.cache/render/*.png
             windows/.cache/asr-results-*.json
+            windows/.cache/meeting-results.json
           if-no-files-found: ignore
 
   macos:

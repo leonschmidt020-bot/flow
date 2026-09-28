@@ -21,6 +21,7 @@ const browser = { ...common, platform: 'browser', format: 'iife', target: 'chrom
 async function scripts() {
   mkdirSync(r('dist-scripts'), { recursive: true });
   await build({ ...node, entryPoints: [r('scripts/test-asr.ts')], outfile: r('dist-scripts/test-asr.js') });
+  await build({ ...node, entryPoints: [r('scripts/test-meeting.ts')], outfile: r('dist-scripts/test-meeting.js') });
 }
 
 function copyStatic(fromDir, toDir, exts) {
@@ -41,6 +42,8 @@ async function app() {
     build({ ...node, entryPoints: [r('src/preload/pill.ts')], outfile: r('dist/preload/pill.js') }),
     build({ ...node, entryPoints: [r('src/preload/hub.ts')], outfile: r('dist/preload/hub.js') }),
     build({ ...node, entryPoints: [r('src/preload/mic.ts')], outfile: r('dist/preload/mic.js') }),
+    build({ ...node, entryPoints: [r('src/preload/meetingCapture.ts')], outfile: r('dist/preload/meetingCapture.js') }),
+    build({ ...browser, entryPoints: [r('src/renderer/meeting/capture.ts')], outfile: r('dist/renderer/meeting/capture.js') }),
     build({ ...browser, entryPoints: [r('src/renderer/pill/pill.ts')], outfile: r('dist/renderer/pill/pill.js') }),
     build({ ...browser, entryPoints: [r('src/renderer/hub/hub.ts')], outfile: r('dist/renderer/hub/hub.js') }),
     build({ ...browser, entryPoints: [r('src/renderer/mic/mic.ts')], outfile: r('dist/renderer/mic/mic.js') }),

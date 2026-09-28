@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 
 const on = (ch: string, cb: (p: unknown) => void) => {
   const f = (_e: unknown, p: unknown) => cb(p);
@@ -20,6 +20,26 @@ contextBridge.exposeInMainWorld('flow', {
   onState: (cb: (s: unknown) => void) => on('hub:state', cb),
   onLevel: (cb: (lv: unknown) => void) => on('hub:level', cb),
   onNavigate: (cb: (page: unknown) => void) => on('hub:navigate', cb),
+  meeting: {
+    state: () => ipcRenderer.invoke('meeting:state'),
+    get: (id: string) => ipcRenderer.invoke('meeting:get', id),
+    start: () => ipcRenderer.invoke('meeting:start'),
+    stop: () => ipcRenderer.invoke('meeting:stop'),
+    pickFile: () => ipcRenderer.invoke('meeting:pickFile'),
+    // File.path is gone since Electron 32 → webUtils
+    dropFiles: (files: File[]) => ipcRenderer.invoke('meeting:import', files.map((f) => webUtils.getPathForFile(f)).filter(Boolean)),
+    rename: (id: string, title: string) => ipcRenderer.invoke('meeting:rename', id, title),
+    renameSpeaker: (id: string, key: string, name: string) => ipcRenderer.invoke('meeting:renameSpeaker', id, key, name),
+    setKeep: (id: string, keep: boolean) => ipcRenderer.invoke('meeting:keep', id, keep),
+    delete: (id: string) => ipcRenderer.invoke('meeting:delete', id),
+    reprocess: (id: string) => ipcRenderer.invoke('meeting:reprocess', id),
+    summarize: (id: string) => ipcRenderer.invoke('meeting:summarize', id),
+    copyPrompt: (id: string) => ipcRenderer.invoke('meeting:copyPrompt', id),
+    copyTranscript: (id: string) => ipcRenderer.invoke('meeting:copyTranscript', id),
+    openFolder: (id: string) => ipcRenderer.invoke('meeting:openFolder', id),
+    setSettings: (p: unknown) => ipcRenderer.invoke('meeting:setSettings', p),
+    onState: (cb: (s: unknown) => void) => on('meeting:state', cb),
+  },
   clipvault: {
     invoke: (name: string, ...args: unknown[]) => ipcRenderer.invoke('clipvault:' + name, ...args),
     on: (name: string, cb: (p: unknown) => void) => on('clipvault:event:' + name, cb),

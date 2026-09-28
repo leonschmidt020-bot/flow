@@ -18,9 +18,14 @@ export const SAMPLE_RATE = 16000;
 
 export interface TranscribeResult { text: string; ms: number; audioSec: number; speechSec: number; segments: number }
 
+/** one decoder pass without VAD – tokens with start times (s, relative to the samples) where the model provides them */
+export interface RawDecode { text: string; tokens: string[]; timestamps: number[]; durations: number[] }
+
 export interface Engine {
   readonly model: ModelId;
   transcribe(samples: Float32Array, language?: AsrLanguage): Promise<TranscribeResult>;
+  /** used by the meeting notetaker (long recordings are chunked there) */
+  decodeRaw(samples: Float32Array): Promise<RawDecode>;
   dispose(): void;
 }
 
@@ -109,12 +114,12 @@ export async function createEngine(o: EngineOptions): Promise<Engine> {
   let language: AsrLanguage = o.language ?? 'auto';
   const rec = await sherpa.OfflineRecognizer.createAsync(recognizerConfig(o, language));
   const vadModel = vadPath(o.root);
-  const decode = async (s: Float32Array): Promise<string> => {
+  const decodeFull = async (s: Float32Array) => {
     const stream = rec.createStream();
     stream.acceptWaveform({ samples: s, sampleRate: SAMPLE_RATE });
-    const r = await rec.decodeAsync(stream);
-    return String(r?.text ?? '').trim();
+    return rec.decodeAsync(stream);
   };
+  const decode = async (s: Float32Array): Promise<string> => String((await decodeFull(s))?.text ?? '').trim();
   return {
     model: o.model,
     async transcribe(samples, lang) {
@@ -132,6 +137,11 @@ export async function createEngine(o: EngineOptions): Promise<Engine> {
         if (t) parts.push(t);
       }
       return { text: parts.join(' ').replace(/\s+/g, ' ').trim(), ms: Date.now() - t0, audioSec: samples.length / SAMPLE_RATE, speechSec, segments: plan.length };
+    },
+    async decodeRaw(samples) {
+      const r = await decodeFull(samples);
+      const arr = (v: unknown) => (Array.isArray(v) ? v : []);
+      return { text: String(r?.text ?? '').trim(), tokens: arr(r?.tokens).map(String), timestamps: arr(r?.timestamps).map(Number), durations: arr(r?.durations).map(Number) };
     },
     dispose() { /* native handles are released by GC */ },
   };

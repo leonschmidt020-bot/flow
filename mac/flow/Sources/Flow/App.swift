@@ -81,7 +81,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         dictation.callActive = { [weak self] in self?.meeting.callActive ?? false }
         Health.shared.busyProbe = { Updater.appBusy }
         meeting.askOver = { app, answer in
-            VFNotify.shared.meetingOver(app: app, end: { answer(true) }, keep: { answer(false) })
+            VFNotify.shared.meetingOver(app: app, end: { answer(true) }, keep: { answer(false) }, dismissed: { answer(nil) })
         }
 
         hotkey.handsFreeActive = { [weak self] in self?.dictation.isHandsFree ?? false }

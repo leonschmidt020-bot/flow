@@ -26,7 +26,8 @@ final class MeetingController {
     private var showWhenDone = false
     /// Meldungskarten (aus der Pille): „Meeting erkannt“, „Meeting vorbei?“, „Transkript fertig“
     var notifyDetected: ((String, @escaping () -> Void, @escaping () -> Void) -> Void)?
-    var askOver: ((String, @escaping (Bool) -> Void) -> Void)?
+    /// Karte „Meeting abgeschlossen?“ – Antwort: true = beenden, false = ausdrücklich weiter aufnehmen, nil = weggeklickt/abgelaufen
+    var askOver: ((String, @escaping (Bool?) -> Void) -> Void)?
     var notifyReady: ((String, String) -> Void)?
     private var appGoneSince: Date?
     private var promptedFor: Set<String> = []
@@ -50,6 +51,18 @@ final class MeetingController {
     func startDetection() {
         detector.onChange = { [weak self] apps in self?.appsChanged(apps) }
         detector.start(interval: 3)
+        // Anruf-App ganz geschlossen (z. B. WhatsApp beendet) → Meeting sofort beenden, nicht weiter aufnehmen
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didTerminateApplicationNotification,
+                                                          object: nil, queue: .main) { [weak self] n in
+            guard let self, self.isRecording, let call = self.callApp,
+                  let app = n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+                  let id = app.bundleIdentifier?.lowercased(),
+                  id == call.lowercased() || id.hasPrefix(call.lowercased() + ".") else { return }
+            log("Meeting: \(self.callAppName ?? call) wurde beendet → Aufnahme endet")
+            self.pill.view.showToast("\(self.callAppName ?? "Anruf-App") geschlossen – Meeting beendet", seconds: 3)
+            self.showWhenDone = true
+            self.stop()
+        }
     }
 
     private func appsChanged(_ apps: [MeetingAppDetector.ActiveApp]) {
@@ -124,24 +137,45 @@ final class MeetingController {
         askMeetingOver()
     }
 
-    /// Pille fragt „Meeting vorbei?“ – Beenden → Transkript öffnet sich; ✕ → weiter aufnehmen.
+    /// Karte „Meeting abgeschlossen?“ – „Ja, beenden“ → Transkript; „Weiter aufnehmen“ → läuft weiter.
+    /// Weggeklickt, abgelaufen oder von einem Diktat verdrängt zählt NICHT als weiter aufnehmen: nach 12 s wird noch
+    /// einmal gefragt, und spätestens 60 s nach dem Freigeben des Mikros endet die Aufnahme von selbst.
     private func askMeetingOver() {
+        guard let gone = appGoneSince else { return }
         let name = callAppName ?? "Anruf"
         var answered = false
-        askOver?(name) { [weak self] yes in
-            answered = true
-            guard let self, self.isRecording else { return }
-            if yes { self.showWhenDone = true; self.stop() }
-            else { self.appGoneSince = nil; self.callApp = nil; self.pill.view.mode = self.restingPillMode }   // weiter aufnehmen
+        askOver?(name) { [weak self] answer in
+            guard let self, !answered, self.isRecording, self.appGoneSince == gone else { return }
+            switch answer {
+            case true?:
+                answered = true
+                self.showWhenDone = true; self.stop()
+            case false?:
+                answered = true
+                self.appGoneSince = nil; self.callApp = nil; self.pill.view.mode = self.restingPillMode   // weiter aufnehmen
+            case nil:
+                // nur weggeklickt – später noch einmal fragen (die 60-s-Grenze läuft weiter)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 12) { [weak self] in
+                    guard let self, self.isRecording, self.appGoneSince == gone,
+                          Date().timeIntervalSince(gone) < 50 else { return }
+                    self.askMeetingOver()
+                }
+            }
         }
-        // Keine Antwort → nach 90 s selbst beenden
-        DispatchQueue.main.asyncAfter(deadline: .now() + 90) { [weak self] in
-            guard let self, !answered, self.isRecording, self.appGoneSince != nil else { return }
+        // Keine ausdrückliche Antwort → 60 s nach dem Freigeben selbst beenden (einmal pro Freigabe)
+        guard !overDeadlineArmed else { return }
+        overDeadlineArmed = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(1, 60 - Date().timeIntervalSince(gone))) { [weak self] in
+            guard let self else { return }
+            self.overDeadlineArmed = false
+            guard self.isRecording, self.appGoneSince == gone else { return }
+            log("Meeting: keine Antwort 60 s nach dem Freigeben → Aufnahme endet")
             self.pill.view.showToast("Meeting beendet – wird ausgewertet", seconds: 3)
             self.showWhenDone = true
             self.stop()
         }
     }
+    private var overDeadlineArmed = false
 
     /// Im Anruf NIE Apples Sprachverarbeitung einschalten: gemessen – dann bekommt eine Anruf-App ohne sie (z. B. Teams)
     /// nur noch absolute Stille, die anderen im Meeting hören dich nicht. Stattdessen bleibt das Mikro normal und wird

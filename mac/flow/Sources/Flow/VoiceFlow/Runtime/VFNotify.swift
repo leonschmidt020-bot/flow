@@ -382,13 +382,16 @@ extension VFNotice {
     }
 
     /// Mikrofon der Meeting-App ist aus → beenden?
+    /// 28.09.2026: Schließen, Ablaufen oder Verdrängen (neues Diktat) zählte als „Weiter aufnehmen“ und schaltete das
+    /// automatische Beenden ab – nach einem WhatsApp-Anruf lief die Aufnahme endlos weiter. Jetzt: nur der Knopf
+    /// „Weiter aufnehmen“ hält die Aufnahme; alles andere meldet `dismissed`, der Controller beendet dann selbst.
     static func meetingOver(app: String, end: @escaping () -> Void, keep: @escaping () -> Void,
-                            anchor: NSRect? = nil) -> VFNotice {
-        VFNotice(id: "meeting_vorbei", title: "Meeting vorbei?",
-                 text: "\(app) nutzt das Mikrofon nicht mehr. Aufnahme beenden?",
+                            dismissed: @escaping () -> Void = {}, anchor: NSRect? = nil) -> VFNotice {
+        VFNotice(id: "meeting_vorbei", title: "Meeting abgeschlossen?",
+                 text: "\(app) nutzt das Mikrofon nicht mehr.",
                  illustration: "illu_meeting_vorbei", fallbackSymbol: VFNotify.symbol(for: "illu_meeting_vorbei"),
-                 primary: ("Beenden & Transkript", end), secondary: ("Weiter aufnehmen", keep),
-                 timeout: 45, anchor: anchor, onClose: keep)   // im Zweifel weiter aufnehmen (nichts geht verloren)
+                 primary: ("Ja, beenden", end), secondary: ("Weiter aufnehmen", keep),
+                 timeout: 45, anchor: anchor, onClose: dismissed)
     }
 
     /// Korrektur im Textfeld erkannt → ins Wörterbuch?
@@ -453,8 +456,9 @@ extension VFNotify {
     func meetingDetected(app: String, accept: @escaping () -> Void, dismiss: @escaping () -> Void, anchor: NSRect? = nil) {
         show(.meetingDetected(app: app, accept: accept, dismiss: dismiss, anchor: anchor))
     }
-    func meetingOver(app: String, end: @escaping () -> Void, keep: @escaping () -> Void, anchor: NSRect? = nil) {
-        show(.meetingOver(app: app, end: end, keep: keep, anchor: anchor))
+    func meetingOver(app: String, end: @escaping () -> Void, keep: @escaping () -> Void,
+                     dismissed: @escaping () -> Void = {}, anchor: NSRect? = nil) {
+        show(.meetingOver(app: app, end: end, keep: keep, dismissed: dismissed, anchor: anchor))
     }
     func wordLearned(old: String, new: String, save: @escaping () -> Void, skip: @escaping () -> Void, anchor: NSRect? = nil) {
         show(.wordLearned(old: old, new: new, save: save, skip: skip, anchor: anchor))

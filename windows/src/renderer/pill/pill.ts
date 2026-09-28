@@ -3,12 +3,16 @@
 type Mode = 'idle' | 'recording' | 'handsfree' | 'transcribing' | 'loading' | 'hidden';
 interface PillState { mode: Mode; progress?: number; label?: string; alwaysVisible?: boolean }
 interface Toast { text: string; kind?: 'info' | 'success' | 'error'; ms?: number }
+interface Card { id: number; title: string; text: string; options: string[]; save: string; no: string; timeoutMs: number }
+interface CardAnswer { id: number; save: boolean; choice?: string; timeout?: boolean }
 interface PillApi {
   onState(cb: (s: PillState) => void): void;
   onLevel(cb: (lv: number) => void): void;
   onToast(cb: (t: Toast) => void): void;
   setInteractive(on: boolean): void;
   click(what: 'cancel' | 'stop'): void;
+  onCard?(cb: (c: Card | null) => void): void;
+  answerCard?(a: CardAnswer): void;
   ready(): void;
 }
 const api = (window as unknown as { flowPill?: PillApi }).flowPill;
@@ -167,7 +171,7 @@ function frame() {
       g.font = `500 12px ${FONT}`;
       const hasDot = toast.kind === 'error' || toast.kind === 'success';
       const tw3 = Math.min(W - 24, g.measureText(toast.text).width + 28 + (hasDot ? 12 : 0));
-      const ty = cy - 13 - 10 - 24 + (1 - life) * 4;
+      const ty = cy - 13 - 10 - 24 + (1 - life) * 4 - cardLift();
       const txx = cx - tw3 / 2;
       g.save();
       g.shadowColor = `rgba(0,0,0,${0.3 * life})`; g.shadowBlur = 12; g.shadowOffsetY = 3;
@@ -194,7 +198,7 @@ requestAnimationFrame(frame);
 
 // click-through except over the hands-free buttons
 addEventListener('mousemove', (e) => {
-  const over = [hot.cancel, hot.stop].some((r) => r && e.clientX >= r.x && e.clientX <= r.right && e.clientY >= r.y && e.clientY <= r.bottom);
+  const over = [hot.cancel, hot.stop].some((r) => r && e.clientX >= r.x && e.clientX <= r.right && e.clientY >= r.y && e.clientY <= r.bottom) || overCard(e.clientX, e.clientY);
   if (over !== interactive) { interactive = over; api?.setInteractive(over); }
   document.body.style.cursor = over ? 'pointer' : 'default';
 });
@@ -204,13 +208,97 @@ addEventListener('mousedown', (e) => {
   else if (inside(hot.stop)) api?.click('stop');
 });
 
-function setState(s: PillState) { state = { ...state, ...s }; }
+// ── question card („Wort gelernt?“) ──
+const cardEl = document.getElementById('card') as HTMLDivElement;
+let card: Card | null = null;
+let choice = '';
+let cardLeft = 0;      // ms of the timeout still to go
+let cardTick = 0;      // performance.now() of the last update
+let cardTimer: number | null = null;
+const ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4.5h10.5a3 3 0 0 1 3 3v12H8a3 3 0 0 1-3-3z"/><path d="M5 16.5a3 3 0 0 1 3-3h10.5"/><path d="M9 8.5h6"/></svg>';
+
+function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, text?: string): HTMLElementTagNameMap[K] {
+  const e = document.createElement(tag);
+  e.className = cls;
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+function cardVisible() { return !!card && !cardEl.hidden && !cardEl.classList.contains('away'); }
+function cardLift() { return cardVisible() ? cardEl.getBoundingClientRect().height + 8 : 0; }
+function overCard(x: number, y: number) {
+  if (!cardVisible()) return false;
+  const r = cardEl.getBoundingClientRect();
+  return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
+}
+function answer(save: boolean, timeout = false) {
+  if (!card) return;
+  const a: CardAnswer = { id: card.id, save, choice: save ? choice : undefined, timeout };
+  showCard(null);
+  if (interactive) { interactive = false; api?.setInteractive(false); }
+  api?.answerCard?.(a);
+}
+function drawCard() {
+  if (!card) return;
+  const kids: HTMLElement[] = [];
+  const head = el('div', 'c-head');
+  const icon = el('div', 'c-icon'); icon.innerHTML = ICON;
+  head.append(icon, el('div', 'c-title', card.title));
+  kids.push(head, el('div', 'c-text', card.text));
+  if (card.options.length > 1) {
+    const chips = el('div', 'c-chips');
+    for (const o of card.options) {
+      const b = el('button', 'chip' + (o === choice ? ' on' : ''), o);
+      b.addEventListener('click', () => { choice = o; drawCard(); });
+      chips.append(b);
+    }
+    kids.push(chips);
+  }
+  const acts = el('div', 'c-actions');
+  const no = el('button', 'btn no', card.no); no.addEventListener('click', () => answer(false));
+  const save = el('button', 'btn save', card.save); save.addEventListener('click', () => answer(true));
+  acts.append(no, save);
+  const bar = el('div', 'c-bar'); const fill = el('i', ''); bar.append(fill);
+  kids.push(acts, bar);
+  cardEl.replaceChildren(...kids);
+  updateBar();
+}
+function updateBar() {
+  const fill = cardEl.querySelector('.c-bar i') as HTMLElement | null;
+  if (fill && card) fill.style.transform = `scaleX(${Math.max(0, Math.min(1, cardLeft / Math.max(1, card.timeoutMs)))})`;
+}
+function showCard(c: Card | null) {
+  if (cardTimer !== null) { clearInterval(cardTimer); cardTimer = null; }
+  card = c;
+  if (!c) { cardEl.hidden = true; cardEl.replaceChildren(); return; }
+  choice = c.options[0] ?? '';
+  cardLeft = c.timeoutMs;
+  cardTick = performance.now();
+  cardEl.hidden = false;
+  drawCard();
+  if (c.timeoutMs > 0) {
+    cardTimer = window.setInterval(() => {
+      const now = performance.now();
+      // the timeout only runs while the card is visible (hidden while dictating) and the mouse is not over it
+      if (cardVisible() && !interactive) cardLeft -= now - cardTick;
+      cardTick = now;
+      updateBar();
+      if (cardLeft <= 0) answer(false, true);
+    }, 100);
+  }
+}
+
+function setState(s: PillState) {
+  state = { ...state, ...s };
+  // while dictating the card steps aside (the pill needs the attention), afterwards it comes back
+  cardEl.classList.toggle('away', state.mode !== 'idle' && state.mode !== 'hidden');
+}
 function showToast(tt: Toast) { const now = performance.now(); toast = { text: tt.text, kind: tt.kind ?? 'info', born: now, until: now + (tt.ms ?? 2200) }; }
 function setLevel(lv: number) { level = Math.min(1, lv * 9); }
 
 api?.onState(setState);
 api?.onLevel(setLevel);
 api?.onToast(showToast);
+api?.onCard?.(showCard);
 api?.ready();
 
 // render-check hooks (offscreen screenshots)
@@ -223,7 +311,9 @@ if (q.has('render')) {
   [w, h] = targetSize(); alpha = 1;
   if (mode === 'recording' || mode === 'handsfree') { level = 0.6; smooth = 0.6; setInterval(() => { level = 0.35 + Math.random() * 0.5; }, 60); }
   if (q.get('toast')) showToast({ text: q.get('toast')!, kind: (q.get('kind') as Toast['kind']) ?? 'info', ms: 60000 });
+  if (q.get('card')) { try { showCard(JSON.parse(q.get('card')!) as Card); } catch { /* bad fixture */ } }
+  setState({ mode });
 }
-(window as unknown as { __pill: unknown }).__pill = { setState, showToast, setLevel };
+(window as unknown as { __pill: unknown }).__pill = { setState, showToast, setLevel, showCard };
 
 export {};

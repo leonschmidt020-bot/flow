@@ -44,6 +44,7 @@ async function app() {
     build({ ...browser, entryPoints: [r('src/renderer/pill/pill.ts')], outfile: r('dist/renderer/pill/pill.js') }),
     build({ ...browser, entryPoints: [r('src/renderer/hub/hub.ts')], outfile: r('dist/renderer/hub/hub.js') }),
     build({ ...browser, entryPoints: [r('src/renderer/mic/mic.ts')], outfile: r('dist/renderer/mic/mic.js') }),
+    build({ ...browser, entryPoints: [r('src/renderer/highlight/highlight.ts')], outfile: r('dist/renderer/highlight/highlight.js') }),
     build({ ...browser, format: 'esm', entryPoints: [r('src/renderer/mic/worklet.ts')], outfile: r('dist/renderer/mic/worklet.js') }),
   ];
   // ClipVault module (other agent) – optional entries
@@ -55,6 +56,9 @@ async function app() {
   if (existsSync(r('src/clipvault/assets'))) cpSync(r('src/clipvault/assets'), r('dist/clipvault/assets'), { recursive: true });
   mkdirSync(r('dist/clipvault/assets'), { recursive: true });
   copyStatic(r('resources'), r('dist/assets'), ['.png', '.ico', '.svg']);
+  // UI Automation helper (plain PowerShell text; asarUnpack'ed by electron-builder, powershell.exe cannot read inside the asar)
+  mkdirSync(r('dist/helpers'), { recursive: true });
+  cpSync(r('src/main/uia/flow-uia.ps1'), r('dist/helpers/flow-uia.ps1'));
   await scripts();
   console.log('build ok →', path.relative(process.cwd(), r('dist')) || 'dist');
 }

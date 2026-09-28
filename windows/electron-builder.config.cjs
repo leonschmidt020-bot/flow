@@ -17,6 +17,8 @@ module.exports = {
     '**/node_modules/uiohook-napi/**',
     '**/node_modules/koffi/**',
     '**/node_modules/@koromix/**',
+    // UI Automation helper script is run by powershell.exe, which cannot read files inside app.asar
+    'dist/helpers/**',
   ],
   npmRebuild: false, // all native deps are N-API prebuilds – nothing to compile
   win: {

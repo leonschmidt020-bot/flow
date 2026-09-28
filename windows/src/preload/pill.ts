@@ -6,5 +6,7 @@ contextBridge.exposeInMainWorld('flowPill', {
   onToast: (cb: (t: unknown) => void) => ipcRenderer.on('pill:toast', (_e, t) => cb(t)),
   setInteractive: (on: boolean) => ipcRenderer.send('pill:interactive', on),
   click: (what: 'cancel' | 'stop') => ipcRenderer.send('pill:click', what),
+  onCard: (cb: (c: unknown) => void) => ipcRenderer.on('pill:card', (_e, c) => cb(c)),
+  answerCard: (a: unknown) => ipcRenderer.send('pill:cardAnswer', a),
   ready: () => ipcRenderer.send('pill:ready'),
 });

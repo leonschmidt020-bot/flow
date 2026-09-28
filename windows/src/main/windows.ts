@@ -4,8 +4,12 @@ import { paths } from './paths';
 
 export type PillMode = 'idle' | 'recording' | 'handsfree' | 'transcribing' | 'loading' | 'hidden';
 export interface PillState { mode: PillMode; progress?: number; label?: string; alwaysVisible?: boolean }
+/** a question card above the pill („Wort gelernt?“) – strings are already localised */
+export interface PillCard { id: number; title: string; text: string; options: string[]; save: string; no: string; timeoutMs: number }
+export interface PillCardAnswer { id: number; save: boolean; choice?: string; timeout?: boolean }
 
-const PILL_W = 460, PILL_H = 150;
+/** tall enough for the learner card above the capsule; the window is click-through except over buttons */
+export const PILL_W = 460, PILL_H = 230;
 
 export class Pill {
   win: BrowserWindow | null = null;
@@ -13,6 +17,7 @@ export class Pill {
   private ready = false;
   private queue: [string, unknown][] = [];
   onClick: (what: 'cancel' | 'stop') => void = () => {};
+  onCardAnswer: (a: PillCardAnswer) => void = () => {};
   /** false in self-tests: never put anything on the screen */
   visible = true;
 
@@ -36,6 +41,11 @@ export class Pill {
     });
     ipcMain.on('pill:interactive', (e, on: boolean) => { if (e.sender === win.webContents) win.setIgnoreMouseEvents(!on, { forward: true }); });
     ipcMain.on('pill:click', (e, what: 'cancel' | 'stop') => { if (e.sender === win.webContents) this.onClick(what); });
+    ipcMain.on('pill:cardAnswer', (e, a: PillCardAnswer) => {
+      if (e.sender !== win.webContents || !a || typeof a.id !== 'number') return;
+      win.setIgnoreMouseEvents(true, { forward: true });
+      this.onCardAnswer({ id: a.id, save: a.save === true, choice: typeof a.choice === 'string' ? a.choice : undefined, timeout: a.timeout === true });
+    });
     this.win = win;
     this.place();
     if (this.visible) win.showInactive();
@@ -64,6 +74,11 @@ export class Pill {
     this.send('pill:state', this.last);
   }
   level(lv: number) { this.send('pill:level', lv); }
+  /** show (or with null: remove) the question card */
+  card(c: PillCard | null) {
+    if (c && this.visible) { this.place(); this.win?.showInactive(); this.win?.setAlwaysOnTop(true, 'screen-saver'); }
+    this.send('pill:card', c);
+  }
   toast(text: string, kind: 'info' | 'success' | 'error' = 'info', ms = 2200) { if (this.visible) { this.place(); this.win?.showInactive(); } this.send('pill:toast', { text, kind, ms }); }
   private onDisplay = () => this.place();
   destroy() { screen.removeListener('display-metrics-changed', this.onDisplay); this.win?.destroy(); this.win = null; }

@@ -15,7 +15,7 @@ export function demoState(kind: string, lang: 'de' | 'en' = 'de'): HubState {
   const status = kind === 'download' ? 'downloading' : kind === 'missing' ? 'missing' : 'ready';
   return {
     settings: {
-      ...DEFAULTS, onboardingDone: true, locale: lang,
+      ...DEFAULTS, onboardingDone: true, locale: lang, mouseTarget: kind === 'mousetarget', mouseTargetAutoSend: kind === 'mousetarget',
       dictionary: kind === 'empty' ? [] : [{ heard: 'clip vault', write: 'ClipVault' }, { heard: 'para keet', write: 'Parakeet' }, { heard: 'github', write: 'GitHub' }, { heard: 'k i', write: 'KI' }],
     },
     history,

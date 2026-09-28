@@ -243,6 +243,8 @@ function settingsPage(): PageView {
     modelBtn.style.display = st === 'missing' || st === 'error' ? '' : 'none';
   });
   const hkOpts: [string, string][] = HOTKEYS.map((k) => [k, hotkeyName(L(), k)]);
+  // sub-options of „Text dorthin, wo die Maus ist“ are greyed out while it is off
+  const dependent = (r: HTMLElement) => { const f = () => r.classList.toggle('off', !S.settings.mouseTarget); f(); syncers.push(f); return r; };
   const el = h('div', null,
     header(L() === 'de' ? '<em>Einstellungen</em>' : '<em>Settings</em>', t('tagline')),
     micNotice() ?? h('span'),
@@ -261,6 +263,11 @@ function settingsPage(): PageView {
       row(t('commands'), t('commandsDesc'), sw('voiceCommands')),
       row(t('polish'), t('polishDesc'), sw('polish')),
       row(t('keepClip'), t('keepClipDesc'), sw('keepInClipboard')))),
+    h('div', { class: 'section' }, h('h2', null, t('secInsert')), h('div', { class: 'card' },
+      row(t('mouseTarget'), t('mouseTargetDesc'), sw('mouseTarget')),
+      dependent(row(t('mouseTargetAutoSend'), t('mouseTargetAutoSendDesc'), sw('mouseTargetAutoSend'))),
+      dependent(row(t('mouseTargetHighlight'), t('mouseTargetHighlightDesc'), sw('mouseTargetHighlight'))),
+      row(t('learnEdits'), t('learnEditsDesc'), sw('learnFromEdits')))),
     h('div', { class: 'section' }, h('h2', null, t('secSystem')), h('div', { class: 'card' },
       row(t('autostart'), null, sw('startWithWindows')),
       row(t('pillVisible'), t('pillVisibleDesc'), sw('pillAlwaysVisible')),

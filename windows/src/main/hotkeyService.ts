@@ -49,6 +49,9 @@ export class HotkeyService {
   /** mark a window in which our own SendInput events come back through the hook */
   injecting(ms: number) { this.injectingUntil = Date.now() + ms; }
 
+  /** is a key of the combo held right now (per our hook)? */
+  comboHeld(): boolean { return comboFor(this.choice).flat().some((k) => this.machine.keysDown.has(k)); }
+
   /** resolves once none of the combo keys is held (max `timeout` ms) */
   async waitReleased(timeout = 1200): Promise<void> {
     const t0 = Date.now();

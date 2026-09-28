@@ -12,4 +12,6 @@ export const paths = {
   asset(name: string) { return path.join(__dirname, 'assets', name); },
   renderer(...p: string[]) { return path.join(__dirname, 'renderer', ...p); },
   preload(name: string) { return path.join(__dirname, 'preload', name + '.js'); },
+  /** files that external programs read (powershell.exe) – outside the asar in packaged builds */
+  helper(name: string) { return path.join(__dirname.replace(/app\.asar(?=[\\/]|$)/u, 'app.asar.unpacked'), 'helpers', name); },
 };

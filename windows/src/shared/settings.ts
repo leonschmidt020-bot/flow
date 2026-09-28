@@ -26,6 +26,14 @@ export interface Settings {
   historyEnabled: boolean;
   historyRetentionDays: number;
   pillAlwaysVisible: boolean;
+  /** „Text dorthin, wo die Maus ist“: on key release the text goes into the window under the mouse */
+  mouseTarget: boolean;
+  /** … and Enter afterwards – only in terminals/chats (core/mouseTarget.ts › autoSend) */
+  mouseTargetAutoSend: boolean;
+  /** blue frame „Text kommt hierher“ around the target window while speaking */
+  mouseTargetHighlight: boolean;
+  /** word learner: watch the field after pasting, ask „Wort gelernt?“ */
+  learnFromEdits: boolean;
   dictionary: DictEntry[];
   onboardingDone: boolean;
 }
@@ -47,6 +55,10 @@ export const DEFAULTS: Settings = {
   historyEnabled: true,
   historyRetentionDays: 90,
   pillAlwaysVisible: true,
+  mouseTarget: false,
+  mouseTargetAutoSend: false,
+  mouseTargetHighlight: true,
+  learnFromEdits: true,
   dictionary: [],
   onboardingDone: false,
 };
@@ -117,6 +129,10 @@ export function migrateSettings(raw: unknown): Settings {
     historyEnabled: bool(r.historyEnabled, DEFAULTS.historyEnabled),
     historyRetentionDays: Math.min(3650, Math.max(1, days)),
     pillAlwaysVisible: bool(r.pillAlwaysVisible, DEFAULTS.pillAlwaysVisible),
+    mouseTarget: bool(r.mouseTarget, DEFAULTS.mouseTarget),
+    mouseTargetAutoSend: bool(r.mouseTargetAutoSend, DEFAULTS.mouseTargetAutoSend),
+    mouseTargetHighlight: bool(r.mouseTargetHighlight, DEFAULTS.mouseTargetHighlight),
+    learnFromEdits: bool(r.learnFromEdits, DEFAULTS.learnFromEdits),
     dictionary: sanitizeDictionary(r.dictionary),
     onboardingDone: bool(r.onboardingDone, false),
   };

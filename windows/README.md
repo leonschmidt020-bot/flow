@@ -10,6 +10,14 @@ Speech recognition runs **100 % on your PC**: no cloud, no account, no telemetry
 - Hold **Right Ctrl** (or Ctrl + Win, Right Alt, F6–F12). **Double-tap** for hands-free.
 - Polish rules ported 1:1 from the Mac app: self-corrections („… nein warte, am Freitag“), repeats, false starts, lists („erstens … zweitens …“, shopping lists, steps, to-dos), punctuation.
 - Voice commands „neue Zeile“ / „neuer Absatz“ (“new line”, “new paragraph”), filler words („ähm“, „äh“) removed.
+- **„Text dorthin, wo die Maus ist“** (*Text goes where the mouse is*, off by default): hold the key, speak, point at any
+  window – on release the text lands there without clicking into it first. A blue frame **„Text kommt hierher“** (*Text goes
+  here*) follows the mouse while you speak (can be switched off). Optional **„Danach automatisch abschicken (Enter)“** (*Send
+  automatically afterwards*, off by default) – only in terminals, Claude Code and chat inputs, never in documents or the code editor.
+- **Word learner – „Wort gelernt?“** (*Learned a word?*, on by default): change a dictated word in the field (e.g. „Klot“ →
+  „Claude“) and the pill offers **„Ins Wörterbuch“** (with choices when ambiguous) or **„Nein“**. Works in text fields, Windows
+  Terminal/conhost and Claude Code's input box (also after the message was sent). Grammar fixes (case at the word start,
+  endings, „zur“ → „zu“) are ignored; password fields and password managers are never read.
 - Hub window: **Verlauf** (history with copy), **Wörterbuch** (your words/replacements), **ClipVault** (clipboard history), **Einstellungen**.
 - UI in German and English.
 
@@ -39,7 +47,7 @@ Everything is stored in `%APPDATA%\Flow` (`app.getPath('userData')`):
 | `history.json` (+ `.bak`) | dictation history (deleted after the retention period) |
 | `models/` | speech models + Silero VAD |
 | `clipvault/` | ClipVault data (see `src/clipvault/`) |
-| `logs/flow.log` | local log without dictated text |
+| `logs/flow.log` | local log without dictated text (mouse target: app, method, extra ms – no text, no window titles) |
 
 ## Development
 
@@ -81,7 +89,43 @@ src/
   renderer/    pill (canvas), hub (vanilla TS), mic capture page + worklet
   shared/      settings schema + migration, i18n (de/en), hub state type
   clipvault/   ClipVault module (separate agent) – contract in src/clipvault/INTERFACE.md
+
+  core/mouseTarget.ts   mouse target rules: window filter, DPI/coordinate maths, click-allowed, auto-Enter list  (MouseTargetRules.swift)
+  core/learner.ts       word learner rules: locate/anchor, Tracker, grammar vs. mishearing, suggestions          (CorrectionLearner.swift)
+  core/terminalPrompt.ts  terminal rows → Claude Code input box / sent messages                                  (TerminalPrompt.swift)
+  main/mouse/     MouseTarget orchestration (capture at release → foreground → a/c/b/d → paste → Enter), koffi layer, frame window
+  main/learn/     CorrectionLearner service (watch ≤ 3 min, 1.5 s readings, finish on the next dictation)
+  main/uia/       UI Automation client + flow-uia.ps1 helper (one long-lived powershell.exe, JSON lines)
 ```
+
+### „Text dorthin, wo die Maus ist“ and the word learner (Windows)
+
+*Mouse target.* Hotkey pressed → the frame follows the window under the mouse (~8 Hz). Hotkey **released** → that window
+counts (`WindowFromPoint` → `GetAncestor(GA_ROOT)`; own, tool, click-through and cloaked windows are looked through, desktop/
+taskbar/start menu mean „no target“). While speech recognition runs, UI Automation is asked what lies under the mouse. Before
+pasting: already the foreground window → nothing to do (method 0). Otherwise `SetForegroundWindow` (right after our own hook saw
+the key release) → `AttachThreadInput` to the foreground thread → ALT tap, each verified with `GetForegroundWindow`, ≤ 400 ms in
+total. Then: a) text field under the mouse → UI Automation `SetFocus`; c) terminal/chat input → one click at the release point,
+only if `WM_NCHITTEST` says `HTCLIENT` and UI Automation sees no button/link/tab there; b) otherwise the window's remembered
+focus; d) failed → paste normally with a toast. Auto-Enter only after a confirmed paste and only in terminals, VS Code's terminal/
+chat inputs, chat apps and browser tabs whose title is a web chat (ChatGPT, Claude, Gemini, WhatsApp Web …).
+
+*Word learner.* After each paste Flow reads the focused element via UI Automation (value / text around the caret; Windows
+Terminal and conhost: visible rows; VS Code & co.: xterm.js's accessibility rows) every 1.5 s for up to 3 minutes, and asks when the
+same change stood for three readings or editing is over (sent, new dictation, text gone). Accepted pairs are stored as normal
+dictionary replacements (Windows' recognisers take no vocabulary hints, so there is no „hint only“ entry as on the Mac).
+
+*UI Automation helper.* `flow-uia.ps1` runs in one `powershell.exe` (hidden, started on first use, stopped after 5 idle
+minutes) using .NET's `System.Windows.Automation` – no compiled binary, and a slow or hung app can never freeze Flow's main process
+(requests time out and the helper is restarted). If PowerShell is blocked (Constrained Language Mode/AppLocker) both features fall
+back to what works without it (no field focus, no learning).
+
+*What only a real Windows PC can verify* (everything above is unit-tested with mocks; the native parts were written without
+running on Windows): the koffi calls (`WindowFromPoint`, DWM cloaking/frame bounds, `SendMessageTimeout(WM_NCHITTEST)`,
+`AttachThreadInput`, the ALT tap, `SendInput` mouse click); whether the foreground switch succeeds within 400 ms on Windows 10/11;
+the helper start-up (execution policy, Add-Type, per-monitor DPI) and what Windows Terminal, conhost, VS Code (xterm rows only with
+screen-reader support on), Chromium chat apps and Word expose through UI Automation; the frame position on mixed-DPI
+multi-monitor setups.
 
 Dictation: hotkey down → mic capture starts (16 kHz mono) → key up → VAD trims/chunks → Parakeet → fillers/dictionary/commands →
 polish rules (list style depends on the foreground app: Word/Outlook `•`, Obsidian/VS Code Markdown, chat apps only from 4 items) →

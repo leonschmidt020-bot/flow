@@ -48,6 +48,12 @@ describe('settings migration', () => {
     expect(s.hotkey).toBe('F9');
     expect(patchSettings(s, { hotkey: 'Bogus' as never }).hotkey).toBe('RightCtrl');
   });
+  it('mouse target + learner: defaults (off / off / frame on / learner on), booleans only', () => {
+    const s = migrateSettings({ version: 2 });
+    expect([s.mouseTarget, s.mouseTargetAutoSend, s.mouseTargetHighlight, s.learnFromEdits]).toEqual([false, false, true, true]);
+    const t = migrateSettings({ version: 2, mouseTarget: true, mouseTargetAutoSend: 'yes', mouseTargetHighlight: false, learnFromEdits: false });
+    expect([t.mouseTarget, t.mouseTargetAutoSend, t.mouseTargetHighlight, t.learnFromEdits]).toEqual([true, false, false, false]);
+  });
   it('is idempotent', () => {
     const once = migrateSettings({ lang: 'english', hotkey: 'rctrl' });
     expect(migrateSettings(once)).toEqual(once);

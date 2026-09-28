@@ -146,3 +146,5 @@ kbd { font: 600 11.5px var(--font); padding: 2px 7px; border-radius: 6px; border
 .cv-host { min-height: 560px; }
 .foot { color: var(--text-faint); font-size: 12px; margin-top: 30px; text-align: center; }
 .btn svg { width: 14px; height: 14px; }
+.row.off { opacity: .42; }
+.row.off .ctl { pointer-events: none; }

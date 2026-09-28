@@ -7,8 +7,23 @@
 import { app } from 'electron';
 
 export function hardExit(code: number, delayMs = 250): void {
-  if (process.platform !== 'win32') { app.exit(code); return; }
+  if (process.platform !== 'win32') {
+    // macOS/Linux: app.exit() can hang too (the self-test on macOS stayed alive after „SMOKE OK“ and later produced an
+    // error dialog). A detached watchdog kills this process after 2 s if it is still there – it never outlives us by more.
+    watchdog(2);
+    app.exit(code);
+    return;
+  }
   setTimeout(() => terminateSelf(code), delayMs);
+}
+
+/** `sh -c 'sleep N; kill -9 <pid>'`, detached + unref'd; harmless if we are already gone (kill fails silently) */
+export function watchdog(seconds: number, pid = process.pid): void {
+  try {
+    const { spawn } = require('node:child_process') as typeof import('node:child_process');
+    const p = spawn('/bin/sh', ['-c', `sleep ${Math.max(1, Math.round(seconds))}; kill -9 ${Math.floor(pid)} 2>/dev/null`], { detached: true, stdio: 'ignore' });
+    p.unref();
+  } catch { /* no sh – nothing we can do */ }
 }
 
 function terminateSelf(code: number): void {

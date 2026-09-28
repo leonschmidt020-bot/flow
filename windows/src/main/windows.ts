@@ -8,11 +8,16 @@ export interface PillState {
   /** notetaker (src/meeting): shown while the dictation pill rests (mode idle) */
   meeting?: { startedAt: number; label: string } | null;
   task?: { label: string; progress: number } | null;
-  card?: { kind: string; title: string; sub: string; yes: string; no: string } | null;
+  /** notetaker card („Teams erkannt · Meeting aufnehmen?“ / „Meeting vorbei?“) – has priority over the learner card */
+  meetingCard?: { kind: string; title: string; sub: string; yes: string; no: string } | null;
 }
 export type PillClick = 'cancel' | 'stop' | 'meetingStop' | 'meetingOpen' | 'cardYes' | 'cardNo';
+/** a question card above the pill („Wort gelernt?“) – strings are already localised */
+export interface PillCard { id: number; title: string; text: string; options: string[]; save: string; no: string; timeoutMs: number }
+export interface PillCardAnswer { id: number; save: boolean; choice?: string; timeout?: boolean }
 
-const PILL_W = 460, PILL_H = 150;
+/** tall enough for the learner card above the capsule; the window is click-through except over buttons */
+export const PILL_W = 460, PILL_H = 230;
 
 export class Pill {
   win: BrowserWindow | null = null;
@@ -20,8 +25,10 @@ export class Pill {
   private ready = false;
   private queue: [string, unknown][] = [];
   onClick: (what: PillClick) => void = () => {};
+  onCardAnswer: (a: PillCardAnswer) => void = () => {};
   /** files dropped onto the pill (audio import) */
   onDrop: (files: string[]) => void = () => {};
+  /** one mouse model: the window is click-through unless the renderer is over a button/card or the cursor is on the drop zone */
   private rendererInteractive = false;
   private dropZone = false;
   private hoverTimer: NodeJS.Timeout | null = null;
@@ -49,6 +56,13 @@ export class Pill {
     ipcMain.on('pill:interactive', (e, on: boolean) => { if (e.sender === win.webContents) { this.rendererInteractive = on; this.applyMouse(); } });
     ipcMain.on('pill:click', (e, what: PillClick) => { if (e.sender === win.webContents) this.onClick(what); });
     ipcMain.on('pill:drop', (e, files: string[]) => { if (e.sender === win.webContents && Array.isArray(files)) this.onDrop(files.map(String)); });
+    ipcMain.on('pill:cardAnswer', (e, a: PillCardAnswer) => {
+      if (e.sender !== win.webContents || !a || typeof a.id !== 'number') return;
+      // the card is gone → click-through again (through the shared mouse model, the drop zone may still hold it)
+      this.rendererInteractive = false;
+      this.applyMouse();
+      this.onCardAnswer({ id: a.id, save: a.save === true, choice: typeof a.choice === 'string' ? a.choice : undefined, timeout: a.timeout === true });
+    });
     this.win = win;
     this.place();
     if (this.visible) win.showInactive();
@@ -95,11 +109,16 @@ export class Pill {
   }
   state(s: Partial<PillState>) {
     this.last = { ...this.last, ...s };
-    const extra = !!(s.meeting || s.task || s.card);
+    const extra = !!(s.meeting || s.task || s.meetingCard);
     if (((s.mode && s.mode !== 'idle') || extra) && this.visible) { this.place(); this.win?.showInactive(); this.win?.setAlwaysOnTop(true, 'screen-saver'); }
     this.send('pill:state', this.last);
   }
   level(lv: number) { this.send('pill:level', lv); }
+  /** show (or with null: remove) the question card */
+  card(c: PillCard | null) {
+    if (c && this.visible) { this.place(); this.win?.showInactive(); this.win?.setAlwaysOnTop(true, 'screen-saver'); }
+    this.send('pill:card', c);
+  }
   toast(text: string, kind: 'info' | 'success' | 'error' = 'info', ms = 2200) { if (this.visible) { this.place(); this.win?.showInactive(); } this.send('pill:toast', { text, kind, ms }); }
   private onDisplay = () => this.place();
   destroy() { if (this.hoverTimer) clearInterval(this.hoverTimer); screen.removeListener('display-metrics-changed', this.onDisplay); this.win?.destroy(); this.win = null; }

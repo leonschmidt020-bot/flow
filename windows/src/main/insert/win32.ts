@@ -3,7 +3,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { KeySender } from './inserter';
 
-export const VK = { CONTROL: 0x11, LCONTROL: 0xa2, RCONTROL: 0xa3, V: 0x56, SHIFT: 0x10, MENU: 0x12, LWIN: 0x5b, RWIN: 0x5c, MASK: 0xe8 } as const;
+export const VK = { RETURN: 0x0d, CONTROL: 0x11, LCONTROL: 0xa2, RCONTROL: 0xa3, V: 0x56, SHIFT: 0x10, MENU: 0x12, LWIN: 0x5b, RWIN: 0x5c, MASK: 0xe8 } as const;
 export const INPUT_KEYBOARD = 1;
 export const KEYEVENTF_KEYUP = 0x0002;
 /** marks our own injected events (dwExtraInfo) */
@@ -69,6 +69,19 @@ export function sendKeys(events: { vk: number; up: boolean }[]): number {
     // older koffi builds: no array→pointer conversion; send one by one
     let n = 0;
     for (const e of arr) n += a.SendInput(1, e, size);
+    return n;
+  }
+}
+
+/** raw SendInput for prepared INPUT objects (mouse events from src/main/mouse/win32Windows.ts) */
+export function sendRaw(inputs: unknown[]): number {
+  const a = load();
+  const size = k().sizeof(a.INPUT);
+  try {
+    return a.SendInput(inputs.length, inputs, size);
+  } catch {
+    let n = 0;
+    for (const e of inputs) n += a.SendInput(1, e, size);
     return n;
   }
 }

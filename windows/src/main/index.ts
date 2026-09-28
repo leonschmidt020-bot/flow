@@ -2,12 +2,12 @@
 //   flags: --no-hotkey (never install the global keyboard hook / shortcuts), --hidden (autostart),
 //          --dev (open hub), --render-check=<dir> (offscreen PNGs, then quit), --smoke=<wav> (end-to-end self test, then quit)
 import { hardExit } from './hardExit';
-import { app, BrowserWindow, clipboard, ipcMain, session, shell, systemPreferences, globalShortcut } from 'electron';
+import { app, BrowserWindow, clipboard, ipcMain, screen, session, shell, systemPreferences, globalShortcut } from 'electron';
 import path from 'node:path';
 import os from 'node:os';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync } from 'node:fs';
 import { paths } from './paths';
-import { initLog, log } from './log';
+import { initLog, log, logText } from './log';
 import { APP_ID, RELEASE, VERSION } from './config';
 import { JsonFile } from './store';
 import { DEFAULTS, migrateSettings, patchSettings, type Settings } from '../shared/settings';
@@ -28,6 +28,14 @@ import type { ClipVaultHandle, FlowClipboardWrite } from '../clipvault/contract'
 import { runRenderCheck } from './renderCheck';
 import { initMeeting, type MeetingHandle } from '../meeting/main';
 import { applyRules } from '../core/textCleaner';
+import type { DisplayMap } from '../core/mouseTarget';
+import { LearnQueue, rememberEntry, type Suggestion } from '../core/learner';
+import { MouseTarget } from './mouse/mouseTarget';
+import { HighlightWindow } from './mouse/highlightWindow';
+import type { NativeWindows } from './mouse/native';
+import { CorrectionLearner } from './learn/correctionLearner';
+import { UiaClient, powershellSpawner } from './uia/uiaClient';
+import { noUia, type UiaPort } from './uia/types';
 
 const argv = process.argv.slice(1);
 const flag = (n: string) => argv.includes(`--${n}`) || argv.some((a) => a.startsWith(`--${n}=`));
@@ -138,14 +146,54 @@ async function main() {
     pushTimer = setTimeout(() => { pushTimer = null; if (hub && !hub.isDestroyed()) hub.webContents.send('hub:state', buildState()); }, 60);
   };
 
-  // ── hotkey + dictation ──
+  // ── „Text dorthin, wo die Maus ist“ + word learner (Windows only; UI Automation via a PowerShell helper) ──
   let hotkeys: HotkeyService | null = null;
+  let native: NativeWindows | null = null;
+  let uiaClient: UiaClient | null = null;
+  let uia: UiaPort = noUia;
+  let highlight: HighlightWindow | null = null;
+  let mouse: MouseTarget | null = null;
+  let learner: CorrectionLearner | null = null;
+  const learnQueue = new LearnQueue();
+  let onLearnCandidate: (s: Suggestion[]) => void = () => {};
+  const displays = (): DisplayMap[] => screen.getAllDisplays().map((d) => ({
+    dip: d.bounds, scale: d.scaleFactor,
+    phys: IS_WIN ? screen.dipToScreenRect(null, d.bounds) : { x: d.bounds.x * d.scaleFactor, y: d.bounds.y * d.scaleFactor, width: d.bounds.width * d.scaleFactor, height: d.bounds.height * d.scaleFactor },
+  }));
+  if (IS_WIN && !flag('smoke')) {
+    try {
+      const { createWin32Native } = require('./mouse/win32Windows') as typeof import('./mouse/win32Windows');
+      native = createWin32Native();
+    } catch (e) { log('mouse-target: native layer unavailable', e); }
+    uiaClient = new UiaClient({ spawn: powershellSpawner(paths.helper('flow-uia.ps1')), log });
+    uia = uiaClient;
+  }
+  if (native) {
+    const nw = native;
+    highlight = new HighlightWindow();
+    mouse = new MouseTarget({
+      native: nw, uia, highlight, settings: () => settings, ownPid: process.pid, displays, log,
+      text: (k) => t(settings.locale, k === 'label' ? 'mtLabel' : k === 'toastNormal' ? 'mtToastNormal' : 'mtToastFocusFailed'),
+      markInjecting: (ms) => hotkeys?.injecting(ms),
+      hotkeyHeld: () => hotkeys?.comboHeld() ?? false,
+    });
+    learner = new CorrectionLearner({
+      uia, log,
+      foreground: () => { try { const w = nw.foreground(); return w ? { pid: w.pid, exe: w.exe } : null; } catch { return null; } },
+      onCandidate: (s) => onLearnCandidate(s),
+      isRejected: (o, n) => learnQueue.rejected.has(`${o}\u0001${n}`),
+    });
+  }
+
+  // ── hotkey + dictation ──
   const dictation = new Dictation({
     mic, asr, pill, history, settings: getSettings, clipboard: clip, keys, foregroundExe,
     waitKeysReleased: () => hotkeys?.waitReleased() ?? Promise.resolve(),
     markInjecting: (ms) => hotkeys?.injecting(ms),
     onClipboardWrite,
     setWriting: (v) => { writing = v; },
+    mouse, learner,
+    foregroundProcess: () => { try { const w = native?.foreground(); return w ? { pid: w.pid, exe: w.exe } : null; } catch { return null; } },
   });
   dictation.on('state', (s) => { if (s === 'idle') { hotkeys?.machine.forceIdle(); pushState(); } });
   mic.on('level', (lv: number) => { pill.level(lv); if (hub && !hub.isDestroyed()) hub.webContents.send('hub:level', lv); });
@@ -158,14 +206,19 @@ async function main() {
   mic.on('started', () => { if (micError) { micError = ''; pushState(); } });
   let meeting: MeetingHandle | null = null;
   pill.onClick = (what) => {
-    if (meeting?.pillClick(what)) return;
-    if (what === 'stop') void dictation.stop(); else if (what === 'cancel') { dictation.cancel(); hotkeys?.machine.forceIdle(); }
+    if (meeting?.pillClick(what)) return; // notetaker: meeting stop/open, meeting card buttons
+    if (what === 'stop') void dictation.stop(false); else if (what === 'cancel') { dictation.cancel(); hotkeys?.machine.forceIdle(); }
   };
   pill.onDrop = (files) => meeting?.importFiles(files);
 
   if (!NO_HOTKEY) {
     hotkeys = new HotkeyService(settings.hotkey, {
-      onStart: () => { if (!paused) void dictation.start(); },
+      onStart: () => {
+        if (paused) return;
+        // the UI Automation helper needs ~1 s to start – start it with the first key press, not at release
+        if (settings.mouseTarget || settings.learnFromEdits) uiaClient?.warm();
+        void dictation.start();
+      },
       onStop: () => void dictation.stop(),
       onCancel: () => dictation.cancel(),
       onHandsFree: () => dictation.handsFree(),
@@ -244,7 +297,7 @@ async function main() {
       pill: {
         meeting: (m) => pill.state({ meeting: m }),
         task: (x) => pill.state({ task: x }),
-        card: (c) => pill.state({ card: c }),
+        card: (c) => pill.state({ meetingCard: c }),
         toast: (text, kind, ms) => pill.toast(text, kind, ms),
         level: (lv) => { if (dictation.state === 'idle') pill.level(lv); },
       },
@@ -273,8 +326,38 @@ async function main() {
     if (prev.startWithWindows !== settings.startWithWindows) applySystem();
     if (prev.pillAlwaysVisible !== settings.pillAlwaysVisible) pill.state({ alwaysVisible: settings.pillAlwaysVisible });
     if (prev.locale !== settings.locale || prev.hotkey !== settings.hotkey) tray.update(settings.locale, settings.hotkey, paused);
+    if (prev.learnFromEdits && !settings.learnFromEdits) learner?.stop();
+    if (!prev.mouseTarget && settings.mouseTarget) uiaClient?.warm();
     pushState();
     return buildState();
+  };
+
+  // ── „Wort gelernt?“ card at the pill ──
+  let cardId = 0;
+  let cardRetry: NodeJS.Timeout | null = null;
+  const showNextCard = () => {
+    if (cardRetry) { clearTimeout(cardRetry); cardRetry = null; }
+    const p = learnQueue.current;
+    if (!p) { pill.card(null); return; }
+    // pill busy (dictation running) → later
+    if (dictation.state !== 'idle') { cardRetry = setTimeout(showNextCard, 2000); return; }
+    const L = settings.locale;
+    const many = p.options.length > 1;
+    pill.card({
+      id: ++cardId, title: t(L, 'learnTitle'), options: p.options, save: t(L, 'learnSave'), no: t(L, 'learnNo'), timeoutMs: many ? 20_000 : 15_000,
+      text: many ? t(L, 'learnTextChoose', { old: p.old }) : t(L, 'learnText', { old: p.old, new: p.options[0] ?? '' }),
+    });
+  };
+  onLearnCandidate = (items) => { if (learnQueue.add(items)) showNextCard(); };
+  pill.onCardAnswer = (a) => {
+    if (a.id !== cardId) return;
+    const e = learnQueue.answer(a.save, a.choice);
+    if (e) {
+      setSettings({ dictionary: rememberEntry(settings.dictionary, e.heard, e.write) });
+      log('Lernen: Wort ins Wörterbuch übernommen' + (logText ? ` „${e.heard}“ → „${e.write}“` : ''));
+      pill.toast(t(settings.locale, 'learnSaved'), 'success', 2000);
+    }
+    if (learnQueue.current) cardRetry = setTimeout(showNextCard, 600); else pill.card(null);
   };
 
   // ── IPC (hub) ──
@@ -309,6 +392,10 @@ async function main() {
     (async () => {
       hotkeys?.stop();
       globalShortcut.unregisterAll();
+      learner?.stop();
+      mouse?.endTracking();
+      highlight?.destroy();
+      uia.dispose();
       try { await cv?.dispose(); } catch (err) { log('clipvault dispose', err); }
       try { await meeting?.dispose(); } catch (err) { log('notetaker dispose', err); }
       settingsFile.flush();

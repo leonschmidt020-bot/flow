@@ -11,6 +11,8 @@ final class PillView: NSView {
         case question(String, String)   // Text, Knopf-Beschriftung
         /// fn + ⌃: Sprachbefehl für markierten Text / Befehl wird ausgeführt
         case command, commandWorking
+        /// Agent-Prompt wird gebaut (Karte daneben zeigt den Fortschritt)
+        case agentPrompt
         case loading(Double)
     }
 
@@ -106,7 +108,7 @@ final class PillView: NSView {
         switch mode {
         case .idle: return hover ? NSSize(width: textWidth(languageShort, size: 11, weight: .semibold) + 44, height: 24) : NSSize(width: 44, height: 9)
         case .listening, .transcribing: return NSSize(width: 66, height: 24)
-        case .command, .commandWorking: return NSSize(width: 84, height: 24)
+        case .command, .commandWorking, .agentPrompt: return NSSize(width: 84, height: 24)
         case .handsFree: return NSSize(width: 112, height: 26)
         case .meeting: return NSSize(width: cameraOn ? 84 : 66, height: 24)
         case .prompt(let s): return NSSize(width: min(440, textWidth(s, size: 12, weight: .medium) + 162), height: 34)
@@ -139,7 +141,7 @@ final class PillView: NSView {
         let settled = abs(ts.width - w) < 0.3 && abs(ts.height - h) < 0.3 && abs(targetAlpha - alpha) < 0.01
         let animatedMode: Bool
         switch mode {
-        case .listening, .handsFree, .transcribing, .meeting, .command, .commandWorking: animatedMode = true
+        case .listening, .handsFree, .transcribing, .meeting, .command, .commandWorking, .agentPrompt: animatedMode = true
         default: animatedMode = false   // Ruhe, Fragen, Laden: stehen still → kein Dauer-Neuzeichnen
         }
         if settled && !animatedMode && Date() > toastUntil && !hover {
@@ -266,6 +268,30 @@ final class PillView: NSView {
                 drawBars(center: bc, count: 7, maxH: h - 9, t: t, level: smoothLevel, color: white, barW: 2.2, gap: 2.3)
             } else {
                 drawDots(center: bc, count: 5, spacing: 6, radius: 1.6, color: white, wave: 1, t: t)
+            }
+        case .agentPrompt:
+            // Agent-Prompt: lila Rand atmet, Funkeln + drei Zeilen, die sich nacheinander füllen (Text entsteht)
+            let pulse: CGFloat = 0.45 + 0.45 * (0.5 + 0.5 * sin(t * 3.2))
+            let pb = NSBezierPath(roundedRect: r.insetBy(dx: 0.5, dy: 0.5), xRadius: h / 2 - 0.5, yRadius: h / 2 - 0.5)
+            pb.lineWidth = 1.2
+            NSColor(calibratedRed: 0.74, green: 0.63, blue: 1.0, alpha: pulse * alpha).setStroke(); pb.stroke()
+            let cfg = NSImage.SymbolConfiguration(pointSize: 10.5, weight: .semibold)
+            if let sp = NSImage(systemSymbolName: "sparkles", accessibilityDescription: nil)?.withSymbolConfiguration(cfg) {
+                let tinted = NSImage(size: sp.size, flipped: false) { rect in
+                    sp.draw(in: rect); NSColor.white.set(); rect.fill(using: .sourceAtop); return true
+                }
+                tinted.draw(in: NSRect(x: r.minX + 10, y: c.y - sp.size.height / 2, width: sp.size.width, height: sp.size.height),
+                            from: .zero, operation: .sourceOver, fraction: alpha)
+            }
+            let lx = r.minX + 32, lw = r.maxX - 12 - lx
+            for i in 0..<3 {
+                let y = c.y + 4.5 - CGFloat(i) * 4.5
+                let ph = (t * 0.8 + CGFloat(i) * 0.33).truncatingRemainder(dividingBy: 1.4) / 1.4
+                let full = [1.0, 0.8, 0.55][i] as CGFloat
+                NSColor.white.withAlphaComponent(0.18 * alpha).setFill()
+                NSBezierPath(roundedRect: NSRect(x: lx, y: y - 1, width: lw * full, height: 2), xRadius: 1, yRadius: 1).fill()
+                white.withAlphaComponent(0.9 * alpha).setFill()
+                NSBezierPath(roundedRect: NSRect(x: lx, y: y - 1, width: lw * full * min(1, ph * 1.3), height: 2), xRadius: 1, yRadius: 1).fill()
             }
         case .meeting:
             // Wie beim Diktat: nur die Wellen, keine Uhr. Pegel = lauteste Spur (du oder die anderen).

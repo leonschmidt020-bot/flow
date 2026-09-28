@@ -19,6 +19,10 @@ ist. Dazu kommt **ClipVault**, ein Zwischenablage-Verlauf (⌘⇧V). Beide laufe
 - „Nur meine Stimme“: Stimmprofil einlernen, fremde Stimmen und Mac-Ton werden herausgefiltert.
 - Sprachbefehle: „Erinner mich morgen um 9 …“, „Termin Freitag 14 Uhr …“, „Notiz: …“, „Schick <Name>: …“ (an den
   geteilten ClipVault-Tresor).
+- Agent-Prompts: „Prompt: …“ sagen und frei erzählen → Flow macht daraus einen klaren Auftrag für Claude Code & Co.
+  (Ziel, Kontext, Aufgabe, Prüfpunkte, Regeln, offene Punkte). Karte an der Pille mit Kopieren/Einfügen/Ansehen, dein
+  Original bleibt immer erhalten, Verlauf unter Scratchpad › Agent-Prompts. Mit Claude-CLI formuliert Claude, ohne sie
+  sortiert Flow lokal nach Regeln.
 - Hub-Fenster mit Insights, Wörterbuch, Snippets, Stil, Transforms, Scratchpad, Training.
 - Updates: roter Punkt an der Pille → „Installieren“. Sicherer Weg: prüfen → tauschen → Lebenszeichen → sonst zurück.
 
@@ -38,7 +42,7 @@ ist. Dazu kommt **ClipVault**, ein Zwischenablage-Verlauf (⌘⇧V). Beide laufe
 | Speicher | ~5 GB frei: Quellcode + Build ~1,5–2 GB, Sprachmodelle ~0,6 GB (FluidAudio, von Hugging Face), mit Whisper +0,6 GB |
 | Netz | nur bei der Installation (Swift-Paket FluidAudio von GitHub, Modelle von Hugging Face) und für Update-Prüfungen |
 | Zeit | erster Build 3–5 Minuten, Modelle je nach Netz 1–5 Minuten |
-| Optional | Homebrew + `whisper-cpp` (genauer), Claude-CLI (Zusammenfassungen, Fragen ans Meeting, Command Mode), Node.js + Cloudflare-Konto (nur fürs Teilen) |
+| Optional | Homebrew + `whisper-cpp` (genauer), Claude-CLI (Zusammenfassungen, Fragen ans Meeting, Command Mode, bessere Agent-Prompts), Node.js + Cloudflare-Konto (nur fürs Teilen) |
 
 ## Installieren
 
@@ -80,6 +84,11 @@ Klappt das nicht, wird ad-hoc signiert – dann nach jedem Update die Freigaben 
 - Optional und **standardmäßig aus**: Funktionen mit der Claude-CLI (Meeting-Zusammenfassung, Fragen ans Meeting,
   Command Mode, „Gründlich“-Feinschliff) schicken den jeweiligen Text an Anthropic – über *dein* Claude-Konto.
   Ohne installierte CLI bleiben sie ausgegraut; alles andere funktioniert.
+- **Agent-Prompts** (Einstellungen › Diktat › Agent-Prompts, Standard „An“) laufen nur, wenn du „Prompt: …“ sagst oder
+  auf „Prompt bauen“ klickst. Mit Claude-CLI geht dann das Diktat (bei Entwickler-Apps auch Fenstertitel und markierter
+  Text, nie die Zwischenablage) über dein Claude-Konto an Anthropic; ohne CLI bleibt alles lokal (Regel-Umbau).
+  Vorschläge bei langen Aufträgen („Daraus einen Agent-Prompt machen?“) gibt es nur mit Claude-CLI. „Aus“ schaltet
+  alles ab, „Nur auf Zuruf“ die Vorschläge.
 
 ## Entfernen
 
@@ -120,7 +129,8 @@ Flow is a local dictation app for macOS: **hold fn, speak, release** – the tex
 **Features:** dictation into any app (German/English), on-device recognition with Parakeet (optional Whisper via
 Homebrew), personal dictionary that learns from your edits, filler removal, snippets, per-app style, meeting notetaker
 with speaker separation, audio import, "only my voice" filtering, voice commands (reminders, calendar, notes, send to
-shared vault), and a hub window. ClipVault: history of text/links/images/files, pinning, collections, OCR, and optional
+shared vault), agent prompts (say "Prompt: …" and ramble – Flow turns it into a structured task for a coding agent,
+keeping your original), and a hub window. ClipVault: history of text/links/images/files, pinning, collections, OCR, and optional
 end-to-end encrypted sharing of one vault with one friend via **your own** free Cloudflare Worker
 ([5-minute guide](clipvault/sync-worker/README.md)). Sharing is off by default.
 
@@ -144,7 +154,10 @@ Calendar/Reminders (only for those voice commands).
 **Privacy:** 100 % local, no account, no telemetry. The only cloud component is the optional self-hosted sync worker,
 which only sees ciphertext. Network use: package/model downloads at install, a git update check every minute
 (can be turned off), link previews in ClipVault. Optional features using the Claude CLI (meeting summary, questions,
-command mode) are off by default and send the relevant text to Anthropic via your own account.
+command mode) are off by default and send the relevant text to Anthropic via your own account. Agent prompts are on by
+default but only run when you say "Prompt: …" or click "build prompt": with the Claude CLI the dictation is sent to
+Anthropic via your account, without it a local rule-based builder is used. Automatic suggestions for long dictations
+only appear when the Claude CLI is installed.
 
 **Uninstall:** `bash "$HOME/Library/Application Support/Flow/src/mac/uninstall-mac.sh"` (add `--purge` to delete data).
 

@@ -62,6 +62,13 @@ final class DictationController {
                 self.peak = max(self.peak, lv)
             }
         }
+        // Agent-Prompt: Pille zeigt „wird gebaut“, solange sie nicht schon wieder etwas anderes tut (neues Diktat)
+        APFlow.shared.actions.pillBusy = { [weak self] on in
+            guard let self else { return }
+            if on { if self.state == .idle { self.pill.view.mode = .agentPrompt } }
+            else if self.pill.view.mode == .agentPrompt { self.pill.view.mode = self.restingMode() }
+        }
+        APFlow.shared.actions.toast = { [weak self] m in self?.pill.view.showToast(m, seconds: 2.4) }
     }
 
     var isHandsFree: Bool { state == .recording(handsFree: true) }
@@ -108,6 +115,7 @@ final class DictationController {
         case .escape:
             if case .recording = state { cancel(silent: false) }
             else if state == .transcribing { abortTranscription("Abgebrochen") }
+            else { APCard.shared.escape() }   // Agent-Prompt-Karte schließen (beim Bauen nur mit der Maus auf der Karte)
         }
     }
 
@@ -379,6 +387,12 @@ final class DictationController {
             // 4) Bereinigen
             let rawWords = text.split(whereSeparator: { $0.isWhitespace }).count
             var cleaned = TextCleaner.applyRules(text, settings: settings)
+            // „Prompt: …“ / „Ich mache jetzt einen Prompt …“ → Agent-Prompt bauen statt einfügen (Original sofort gesichert)
+            let useMouse = await MainActor.run { self.mouseSession > 0 }
+            if await APFlow.shared.consume(cleaned, duration: dur, useMouse: useMouse, finish: {
+                self.transcribeJob = nil; self.state = .idle; self.pill.view.mode = self.restingMode(); self.pill.pinnedToScreen = false
+                MouseTarget.shared.discard(); self.mouseSession = 0
+            }) { return }
             // Sprachbefehl am Anfang („Schick Nico: …“, „Erinner mich …“, „Termin …“, „Notiz: …“) → ausführen statt einfügen
             if await VoiceCommands.shared.consume(cleaned, duration: dur, toast: { m in self.pill.view.showToast(m, seconds: 2.4) }, finish: { self.transcribeJob = nil; self.state = .idle; self.pill.view.mode = self.restingMode(); self.pill.pinnedToScreen = false }) { return }
             let dictFixes = Settings.frozen.dictionary.filter { $0.vocabOnly != true && !$0.heard.isEmpty }
@@ -418,6 +432,11 @@ final class DictationController {
                            tReady.timeIntervalSince(tSys) - sysWait, tPaste.timeIntervalSince(tReady), done.timeIntervalSince(tPaste),
                            expired > 0 ? " – Tempo-Garantie: Parakeet-Ergebnis (Whisper zu langsam)" : ""))
                 if !cleaned.isEmpty { DictationHistory.shared.add(text: cleaned, duration: dur) }
+                // Langer Auftrag an einen Agenten? Leiser Vorschlag an der Pille (erst nach dem Einfügen, keine Verzögerung)
+                if words >= 35 {
+                    let text = cleaned
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { APFlow.shared.offerIfLong(text: text, duration: dur, bundleID: frontBundle) }
+                }
             }
             if cleaned.isEmpty { log(String(format: "Leer erkannt – Spitzenpegel %.2f (letzte Aufnahme: ~/.config/flow/letzte-aufnahme.wav)", self.peak)) }
         }

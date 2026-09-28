@@ -90,6 +90,7 @@ enum CLI {
             if let c = QualityCLI.run(args) { return c }
             if let c = AudioImportCLI.run(args) { return c }
             if let c = SpeedCLI.run(args) { return c }
+            if let c = APCLI.run(args) { return c }
             // Unbekannter Befehl: NIE die App starten (sonst läuft ein zweites Flow mit und fügt alles doppelt ein)
             FileHandle.standardError.write("Unbekannter Befehl: \(cmd)\n".data(using: .utf8)!)
             return 2
@@ -299,6 +300,7 @@ enum CLI {
             ("8_frage", .prompt("Meeting erkannt · Zoom"), 0, false), ("9_laden", .loading(0.43), 0, false), ("8b_lernen", .question("„ID“ → „Lidl“ merken?", "Speichern"), 0, false),
             ("v1_seite_ruhe", .idle, 0, false), ("v2_seite_sprechen", .listening, 0.85, false), ("v3_seite_freihand", .handsFree, 0.6, false),
             ("v4_seite_meeting", .meeting(start: Date()), 0.6, false),
+            ("10_agent_prompt", .agentPrompt, 0, false),
         ]
         for (name, mode, lv, hover) in states {
             let win = NSWindow(contentRect: NSRect(x: 1000, y: 500, width: 460, height: 150), styleMask: [.borderless], backing: .buffered, defer: false)

@@ -22,7 +22,9 @@ Signatur (`scripts/signing.sh`): `FLOW_SIGN_IDENTITY` → Identität der install
 
 Prüf-Befehle (nie die Dev-Binary im App-Modus starten – sie verweigert das ohne Bundle ohnehin):
 `.build/release/Flow --version`, `--setup-status`, `--prewarm-models`, `--render-onboarding <ordner>`,
-`--render-hub <ordner>`, `--pages-test`.
+`--render-hub <ordner>`, `--pages-test`, `--selftest-agent-prompt`, `--agent-prompt-render <ordner>`,
+`--agent-prompt-detect "Text" [Sekunden] [Bundle-ID]`, `--agent-prompt-build <text|@datei> [--rules]` (echter Claude-Aufruf).
+Alle Selbsttests/Renders mit `FLOW_HOME=<leerer Ordner>`.
 
 ## Optionale Teile (Standard aus, ohne sie läuft alles andere)
 
@@ -30,8 +32,13 @@ Prüf-Befehle (nie die Dev-Binary im App-Modus starten – sie verweigert das oh
 |---|---|---|
 | Whisper large-v3-turbo | `brew install whisper-cpp` + Modell (`./setup.sh --with-whisper`) | Parakeet allein (Standard-Engine wird automatisch Parakeet) |
 | Meeting-Zusammenfassung, Fragen ans Meeting (auch mit Bildern), „Gründlich“-Feinschliff, Command Mode (fn + ⌃) | Claude-CLI (`claude`) | Schalter ausgegraut; fn + ⌃ = normales Diktat; Meeting-Fragen antworten mit Hinweis |
+| Agent-Prompts formulieren (Claude Sonnet, Aufwand low, live gestreamt) | Claude-CLI (`claude`) | Regel-Umbau (`APRules`: Sätze → Ziel/Kontext/Aufgabe/Akzeptanz/Regeln/Offene Punkte, nichts geht verloren); Karte zeigt leise „Prompt · ohne KI“ / „Regeln · ohne Claude-CLI“; **keine automatischen Vorschläge** (nur auf Zuruf „Prompt: …“) |
 | Feinschliff „Schnell“ mit Apple Intelligence | Apple Intelligence eingeschaltet | nur Regeln (QuickPolish) |
 | ClipVault teilen | eigener Worker (`../clipvault/sync-worker/README.md`) | ClipVault lokal |
+
+Agent-Prompts (Standard „An“, Einstellungen › Diktat): ohne Claude-CLI bleiben Vorschläge bei langen Aufträgen bewusst
+aus – der Regel-Umbau sortiert nur und formuliert nichts um, das lohnt keine ungefragte Unterbrechung (der Text steht
+ja schon da). Wer ihn will, sagt „Prompt: …“. Code: `Sources/Flow/VoiceFlow/AgentPrompt/`, Verlauf `~/.config/flow/prompts/`.
 
 ## Release-Tor
 
@@ -49,8 +56,8 @@ anderes Präfix. Bericht: Terminal + `tests/last-release.txt`.
 | 1 Build | `swift build -c release`, frisches `--bundle-only`-Bundle (Signatur, Version), `git status` von `mac/` unverändert, Bash-Lint aller `mac/**/*.sh`, `FLOW_REPO_URL` in `flow.conf` = `install-mac.sh` |
 | 1b Update-Sicherheit | Staging-Prüfung, Zertifikat ≥ 30 Tage, `tests/lib/rollback_test.sh` (Schein-App), `--selftest-health` |
 | 2 CLI-Schutz | unbekannter Befehl = Exit 2, Binary ohne Bundle verweigert den App-Modus, `app.lock`, Selbsttests verweigern `~/.config/flow` |
-| 3 Wort-Lerner | `--selftest-learner`, `--selftest-mouse-target` |
-| 3b Oberfläche | Offscreen-Renders (Pille, Neu-Liste, Update-Karte, Hub) |
+| 3 Wort-Lerner | `--selftest-learner`, `--selftest-mouse-target`, `--selftest-agent-prompt` (Auslöser, Erkennung, Regel-Rückfall, Schein-Claude, Verlauf, ohne Claude-CLI) |
+| 3b Oberfläche | Offscreen-Renders (Pille, Neu-Liste, Update-Karte, Agent-Prompt-Karten, Hub) |
 | 4 Erkennung | TTS-Testset `tests/audio/` (nur `say`, erfundene Namen) über `--engine-bench`, `--voicemask-bench`, `--dictation-sim` gegen `tests/baseline/recognition.json` |
 | 5 Sync + Teilen | lokaler `wrangler dev` mit `INIT_SECRET`, zwei Test-Geräte, Text/Bild/5-MB-Datei, Worker verweigert Tresor ohne Init-Geheimnis |
 | 6 Update-Weg | Temp-Remote auf dem letzten Tag, Klon „als Freund“ mit lokalen Änderungen, genau der Befehl des Updaters |

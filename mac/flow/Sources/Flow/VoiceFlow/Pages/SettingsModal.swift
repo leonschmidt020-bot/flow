@@ -361,6 +361,7 @@ private struct DictationSection: View {
             }
         }
         SCard(caption: "Sprachbefehle") { VoiceCommandSettingsRows() }
+        SCard(caption: "Agent-Prompts") { APSettingsRows() }
     }
 }
 

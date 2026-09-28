@@ -12,7 +12,8 @@ enum Inserter {
     static var accessibilityTrusted: Bool { AXIsProcessTrusted() }
     private static var lastInsert: (text: String, app: String, at: Date)?
 
-    static func insert(_ raw: String) -> Outcome {
+    /// `source` = Quelle in ClipVault (Agent-Prompt fügt als „Agent-Prompt“ ein, nicht als „Diktat“)
+    static func insert(_ raw: String, source: String = "Diktat") -> Outcome {
         var text = raw
         // Leerzeichen davor, wenn direkt an ein Wort angehängt wird.
         let app = NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? ""
@@ -39,7 +40,7 @@ enum Inserter {
         let saved = Settings.shared.keepInClipboard ? nil : snapshot(pb)
         pb.clearContents()
         pb.setString(text, forType: .string)
-        pb.setString("Diktat", forType: clipVaultSource)
+        pb.setString(source, forType: clipVaultSource)
         guard accessibilityTrusted else {
             return .copiedOnly(reason: "Bedienungshilfen fehlen – in Zwischenablage")
         }

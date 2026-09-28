@@ -109,6 +109,8 @@ final class ScratchpadStore: ObservableObject {
 
 struct VFScratchpadPage: View {
     @ObservedObject private var store: ScratchpadStore
+    /// Reiter „Notizen“ | „Agent-Prompts“ (liegt im APStore, damit „Ansehen“ an der Prompt-Karte direkt hierher springt)
+    @ObservedObject private var prompts = APStore.shared
     @State private var draft = ""
     @State private var copied = false
     @AppStorage("vf.pages.bannerHidden.scratchpad") private var bannerHidden = false
@@ -118,6 +120,7 @@ struct VFScratchpadPage: View {
 
     var body: some View {
         PGPage(title: "Scratchpad", badge: "Beta") {
+            if prompts.hubTab == "prompts" { EmptyView() } else {
             HStack(spacing: 14) {
                 Text("Diktate hier sammeln").font(.system(size: 17)).foregroundStyle(VF.ink.opacity(0.8))
                 Image(systemName: "info.circle").font(.system(size: 14)).foregroundStyle(VF.muted)
@@ -125,6 +128,7 @@ struct VFScratchpadPage: View {
                 Toggle("", isOn: $store.collectDictations).toggleStyle(.switch).labelsHidden().tint(VF.black)
                 PGPrimaryButton("Neue Notiz") { store.newNote(); draft = "" }
                     .padding(.leading, 8)
+            }
             }
         } content: {
             if !bannerHidden {
@@ -137,16 +141,26 @@ struct VFScratchpadPage: View {
                 .padding(.top, 32)
             }
 
-            HStack(spacing: 0) {
-                noteList.frame(width: 300)
-                Rectangle().fill(VF.hairline).frame(width: 1)
-                editor
+            PGTabBar(tabs: [PGTab(id: "notizen", title: "Notizen"),
+                            PGTab(id: "prompts", title: "Agent-Prompts", badge: prompts.records.isEmpty ? nil : "\(prompts.records.count)")],
+                     selection: $prompts.hubTab)
+                .padding(.top, -30)
+            Group {
+                if prompts.hubTab == "prompts" {
+                    APPromptsPane(store: prompts)
+                } else {
+                    HStack(spacing: 0) {
+                        noteList.frame(width: 300)
+                        Rectangle().fill(VF.hairline).frame(width: 1)
+                        editor
+                    }
+                }
             }
             .frame(height: 560)
             .background(RoundedRectangle(cornerRadius: VF.cardRadius).fill(VF.card))
             .clipShape(RoundedRectangle(cornerRadius: VF.cardRadius))
             .overlay(RoundedRectangle(cornerRadius: VF.cardRadius).stroke(VF.hairline))
-            .padding(.top, 40)
+            .padding(.top, 24)
         }
         .onAppear { draft = store.current?.text ?? "" }
         .onChange(of: store.selectedID) { draft = store.current?.text ?? "" }

@@ -19,7 +19,9 @@ Speech recognition runs **100 % on your PC**: no cloud, no account, no telemetry
   Terminal/conhost and Claude Code's input box (also after the message was sent). Grammar fixes (case at the word start,
   endings, „zur“ → „zu“) are ignored; password fields and password managers are never read.
 - **Notetaker**: records meetings (microphone + system audio), transcribes them with speakers, imports audio/video files – all local.
-- Hub window: **Verlauf** (history with copy), **Notetaker**, **Wörterbuch** (your words/replacements), **ClipVault** (clipboard history), **Einstellungen**.
+- **Agent-Prompts** (new in 0.3.0): say **„Prompt: …“** and just talk – Flow turns the rambling dictation into a clear task for a
+  coding agent (goal, context, task, acceptance criteria, rules, open questions). Your original is saved first. See [Agent-Prompts](#agent-prompts).
+- Hub window: **Verlauf** (history with copy), **Notetaker**, **Agent-Prompts**, **Wörterbuch** (your words/replacements), **ClipVault** (clipboard history), **Einstellungen**.
 - UI in German and English.
 
 ## Install (for friends)
@@ -79,6 +81,49 @@ shown. It runs without tools/MCP/session and sends the transcript to *your* Clau
 the WAV tracks for *Neu auswerten*. A meeting whose `meeting.json` became unreadable falls back to `meeting.json.bak`; if both are broken
 the folder is listed as damaged and never deleted automatically.
 
+## Agent-Prompts
+
+**Deutsch.** Sag am Anfang **„Prompt: …“**, **„Agent-Prompt …“**, **„Prompt für den Agenten / für Claude Code …“** oder **„Ich mache
+jetzt einen Prompt …“** – oder am Ende **„… mach daraus einen Prompt“** – und erzähl einfach frei. Flow fügt dann nichts ein, sondern
+baut einen klaren Auftrag (Ziel · Kontext · Aufgabe · Akzeptanzkriterien · Regeln · offene Punkte). Typische Verhörer („Promt“,
+„Brompt“, „Agenten Prompt“) zählen mit, Sätze *über* Prompts („Der Prompt war zu lang“) nicht.
+
+- **Dein Original geht nie verloren:** es liegt sofort als **„Diktat (Original)“** in der Zwischenablage, in ClipVault und im Verlauf –
+  noch bevor gebaut wird. Abbrechen oder Fehler → die Karte bietet **„Original einfügen“** / **„Original kopieren“** / **„Nochmal“**.
+- **Karte an der Pille:** Live-Text beim Schreiben, dann **„Dein Agent-Prompt ist fertig“** mit Vorschau, **Kopiert ✓ · Einfügen ·
+  Ansehen** und dem Umschalter **Prompt | Original**. *Einfügen* schreibt ins Fenster, in das du diktiert hast (Enter danach nur mit
+  „Danach automatisch abschicken“). **Esc** bricht das Bauen nur ab, wenn die Maus auf der Karte ist.
+- **Langer Auftrag ohne „Prompt: …“?** Flow erkennt lange Aufträge an einen Agenten (VS Code, Cursor, Terminal, Claude …), fügt sie
+  normal ein und fragt leise **„Daraus einen Agent-Prompt machen?“** – nur mit Claude-CLI.
+- **Einstellungen › Agent-Prompts:** **An** (Standard) / **Nur auf Zuruf** / **Aus**. Die letzten 50 Prompts (mit Original) stehen
+  unter **Agent-Prompts** im Hub.
+- **Claude-CLI ist optional.** Mit deiner eigenen [Claude Code CLI](https://docs.claude.com/en/docs/claude-code) (`claude.exe` vom
+  Installer oder `claude.cmd` über npm) formuliert Claude Sonnet (Aufwand low, Zeitlimit 45 s) den Prompt. Ohne sie baut Flow ihn
+  **lokal nach Regeln** – nichts geht verloren, umformuliert wird nichts; die Karte sagt dann leise „Prompt · ohne KI“.
+- **Datenschutz:** Text geht **nur** an Anthropic, wenn du „Prompt: …“ sagst oder auf „Prompt bauen“ klickst – und nur über **deine
+  eigene** Claude-CLI (dein Konto; keine Werkzeuge, keine MCP-Server, keine gespeicherte Sitzung). Mitgeschickt werden das Diktat,
+  der App-Name und – nur bei Entwickler-/Agenten-Apps – der Fenstertitel; nie die Zwischenablage. Das Protokoll enthält nur Modell,
+  Aufwand, Wortzahlen und Zeiten, nie Text.
+
+**English.** Start with **“Prompt: …”**, **“Agent prompt …”**, **“Prompt for Claude Code …”** or **“I'm going to make a prompt …”** – or
+end with **“… turn this into a prompt”** – and just talk. Flow does not paste; it builds a clear task for a coding agent (goal ·
+context · task · acceptance criteria · rules · open questions). Common mishearings count; sentences *about* prompts don't.
+
+- **Your original is never lost:** it goes to the clipboard, ClipVault (“Diktat (Original)”) and the history *before* building.
+  Cancelled or failed → **Paste original** / **Copy original** / **Try again**.
+- **Card at the pill:** live text while it is written, then **“Your agent prompt is ready”** with a preview, **Copied ✓ · Paste ·
+  View** and a **Prompt | Original** toggle. *Paste* goes into the window you dictated into (Enter only with “Send automatically
+  afterwards”). **Esc** cancels building only while the mouse is over the card.
+- **Long task without “Prompt: …”?** Flow spots long tasks aimed at an agent, pastes them as usual and quietly asks **“Turn this
+  into an agent prompt?”** – only with the Claude CLI.
+- **Settings › Agent prompts:** **On** (default) / **Only on request** / **Off**. The last 50 prompts (with originals) live on the
+  hub page **Agent prompts**.
+- **The Claude CLI is optional.** With your own Claude Code CLI (`claude.exe` from the installer or `claude.cmd` via npm), Claude
+  Sonnet (effort low, 45 s limit) writes the prompt; without it Flow builds it **locally by rules** – nothing lost, nothing reworded.
+- **Privacy:** text goes to Anthropic **only** when you say “Prompt: …” or click “Build prompt”, and only through **your own** Claude
+  CLI (your account; no tools, no MCP servers, no stored session). Sent: the dictation, the app name and – for developer/agent
+  apps only – the window title; never the clipboard. The log holds model, effort, word counts and times only, never text.
+
 ## Data
 
 Everything is stored in `%APPDATA%\Flow` (`app.getPath('userData')`):
@@ -90,6 +135,7 @@ Everything is stored in `%APPDATA%\Flow` (`app.getPath('userData')`):
 | `models/` | speech models + Silero VAD + diarization models |
 | `meetings/<id>/` | `meeting.json` (+ `.bak`, atomic), `ich.wav` / `andere.wav` (if *Audio behalten*), `Kontext-Paket/` |
 | `meetings/settings.json` | notetaker settings |
+| `prompts/` | Agent-Prompts: one `.md` per prompt (header, prompt, original), at most 50, atomic writes; unreadable files move to `prompts/defekt/` |
 | `clipvault/` | ClipVault data (see `src/clipvault/`) |
 | `logs/flow.log` | local log without dictated text (mouse target: app, method, extra ms – no text, no window titles) |
 
@@ -138,6 +184,10 @@ src/
   clipvault/   ClipVault module (separate agent) – contract in src/clipvault/INTERFACE.md
   meeting/     Notetaker: controller (Electron-free), recorder + capture backend, chunking, diarizer, merge, package/prompt,
                store/retention, call detection (registry), decoder, Claude CLI, i18n; main.ts = Electron glue (IPC, Ctrl+Alt+M, tray)
+
+  agentPrompt/  Agent-Prompts (port of mac/…/AgentPrompt): core.ts (triggers, detection, rule builder, gist), builder.ts
+               (Claude → rules, system prompt), claudeCli.ts (find claude.exe/.cmd, stream-json, cmd.exe quoting), store.ts,
+               flow.ts (Electron-free), testSet.ts (labelled cases); main/agentPrompt.ts = Electron glue, renderer/pill/apCard.ts = card
 
   core/mouseTarget.ts   mouse target rules: window filter, DPI/coordinate maths, click-allowed, auto-Enter list  (MouseTargetRules.swift)
   core/learner.ts       word learner rules: locate/anchor, Tracker, grammar vs. mishearing, suggestions          (CorrectionLearner.swift)

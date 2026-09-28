@@ -17,4 +17,6 @@ export interface HubState {
   platform: string;
   paused: boolean;
   hotkeysDisabled: boolean;
+  /** Claude Code CLI found (Agent-Prompts: Claude vs. rules) */
+  claudeCli?: boolean;
 }

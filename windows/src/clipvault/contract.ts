@@ -8,6 +8,8 @@ export interface FlowClipboardWrite {
   text: string;
   /** insert = transient write before Ctrl+V, restore = old clipboard put back, keep = dictation stays (user setting) */
   phase: 'insert' | 'restore' | 'keep';
+  /** ClipVault source label for `keep` writes (default „Diktat“; Agent-Prompts: „Diktat (Original)“ / „Agent-Prompt“) */
+  source?: string;
 }
 
 export interface ClipVaultContext {

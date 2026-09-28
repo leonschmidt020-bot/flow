@@ -36,6 +36,7 @@ import type { NativeWindows } from './mouse/native';
 import { CorrectionLearner } from './learn/correctionLearner';
 import { UiaClient, powershellSpawner } from './uia/uiaClient';
 import { noUia, type UiaPort } from './uia/types';
+import { initAgentPrompt, type AgentPromptHandle } from './agentPrompt';
 
 const argv = process.argv.slice(1);
 const flag = (n: string) => argv.includes(`--${n}`) || argv.some((a) => a.startsWith(`--${n}=`));
@@ -96,7 +97,7 @@ async function main() {
   // ClipVault gets told about our own clipboard writes
   let writing = false;
   const cvListeners = new Set<(w: FlowClipboardWrite) => void>();
-  const onClipboardWrite = (phase: InsertPhase, text: string) => { for (const l of cvListeners) { try { l({ phase, text }); } catch { /* */ } } };
+  const onClipboardWrite = (phase: InsertPhase, text: string, source?: string) => { for (const l of cvListeners) { try { l({ phase, text, source }); } catch { /* */ } } };
 
   let keys: KeySender;
   let foregroundExe = () => '';
@@ -139,6 +140,7 @@ async function main() {
     platform: process.platform,
     paused,
     hotkeysDisabled: NO_HOTKEY,
+    claudeCli: agent?.claudeAvailable() ?? false,
   });
   let pushTimer: NodeJS.Timeout | null = null;
   const pushState = () => {
@@ -185,6 +187,18 @@ async function main() {
     });
   }
 
+  // ── Agent-Prompts („Prompt: …“ → a clear task for a coding agent; src/agentPrompt) ──
+  let agent: AgentPromptHandle | null = null;
+  try {
+    agent = initAgentPrompt({
+      userData: paths.userData, pill, settings: getSettings, clipboard: clip, keys, onClipboardWrite,
+      setWriting: (v) => { writing = v; }, markInjecting: (ms) => hotkeys?.injecting(ms), native, mouse, history, pushState,
+      openHub: (page) => openHub(page), hubs: () => (hub && !hub.isDestroyed() ? [hub] : []), log: (...a) => log(...a),
+    });
+  } catch (e) {
+    log('agent-prompt init failed', e);
+  }
+
   // ── hotkey + dictation ──
   const dictation = new Dictation({
     mic, asr, pill, history, settings: getSettings, clipboard: clip, keys, foregroundExe,
@@ -194,6 +208,7 @@ async function main() {
     setWriting: (v) => { writing = v; },
     mouse, learner,
     foregroundProcess: () => { try { const w = native?.foreground(); return w ? { pid: w.pid, exe: w.exe } : null; } catch { return null; } },
+    agentPrompt: agent,
   });
   dictation.on('state', (s) => { if (s === 'idle') { hotkeys?.machine.forceIdle(); pushState(); } });
   mic.on('level', (lv: number) => { pill.level(lv); if (hub && !hub.isDestroyed()) hub.webContents.send('hub:level', lv); });
@@ -223,6 +238,7 @@ async function main() {
       onCancel: () => dictation.cancel(),
       onHandsFree: () => dictation.handsFree(),
     }, settings.doubleTapHandsFree);
+    hotkeys.onEscape = () => agent?.escape();
     hotkeys.onComboDown = () => { if (IS_WIN && hotkeys?.usesWin) { hotkeys.injecting(60); startMenuMask(); } };
     if (!hotkeys.start()) log('global hotkey unavailable');
   }

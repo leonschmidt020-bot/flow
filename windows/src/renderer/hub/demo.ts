@@ -24,6 +24,6 @@ export function demoState(kind: string, lang: 'de' | 'en' = 'de'): HubState {
     wordsTotal: history.length ? 18432 : 0,
     asr: { model: 'parakeet-v3', status, progress: status === 'downloading' ? 0.42 : 1, bytesPerSec: 23.4e6, error: '', installed: { 'parakeet-v3': status === 'ready', 'whisper-turbo': false } },
     micError: kind === 'micerror' ? 'NotAllowedError' : '',
-    version: '0.1.0', platform: 'win32', paused: false, hotkeysDisabled: false,
+    version: '0.3.0', platform: 'win32', paused: false, hotkeysDisabled: false, claudeCli: kind !== 'noclaude',
   };
 }

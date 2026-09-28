@@ -10,5 +10,10 @@ contextBridge.exposeInMainWorld('flowPill', {
   drop: (files: File[]) => ipcRenderer.send('pill:drop', files.map((f) => webUtils.getPathForFile(f)).filter(Boolean)),
   onCard: (cb: (c: unknown) => void) => ipcRenderer.on('pill:card', (_e, c) => cb(c)),
   answerCard: (a: unknown) => ipcRenderer.send('pill:cardAnswer', a),
+  // Agent-Prompt card
+  onAgent: (cb: (m: unknown) => void) => ipcRenderer.on('pill:ap', (_e, m) => cb(m)),
+  onAgentFlash: (cb: (f: unknown) => void) => ipcRenderer.on('pill:apFlash', (_e, f) => cb(f)),
+  agentAction: (a: string) => ipcRenderer.send('pill:apAction', a),
+  agentHover: (on: boolean) => ipcRenderer.send('pill:apHover', on),
   ready: () => ipcRenderer.send('pill:ready'),
 });

@@ -7,6 +7,7 @@ import type { History } from './history';
 import type { Settings } from '../shared/settings';
 import { t } from '../shared/i18n';
 import { processTranscript, wordCount } from '../core/pipeline';
+import { applyRules } from '../core/textCleaner';
 import { targetForExe } from '../core/smartLists';
 import { insertText, type ClipboardPort, type InsertPhase, type KeySender } from './insert/inserter';
 import { log, logText } from './log';
@@ -20,6 +21,13 @@ export interface MouseTargetLike {
   capture(): CaptureResult;
   prepare(c: CaptureResult | null): Promise<Prepared>;
   autoSend(inserted: string, prep: Prepared): Promise<string>;
+}
+/** Agent-Prompts (src/main/agentPrompt.ts) as the dictation sees it */
+export interface AgentPromptLike {
+  /** true = „Prompt: …“ – the flow took over (original saved, prompt being built): do not paste */
+  consume(cleaned: string, info: { duration: number; exe: string; cap: CaptureResult | null }): boolean;
+  /** after a normal paste: maybe the subtle offer card */
+  offerLater(text: string, info: { duration: number; exe: string; prep: Prepared | null }): void;
 }
 /** word learner (src/main/learn/correctionLearner.ts) */
 export interface LearnerLike {
@@ -47,6 +55,7 @@ export interface DictationDeps {
   learner?: LearnerLike | null;
   /** foreground process after pasting (for the learner when the text did not go to the mouse target) */
   foregroundProcess?: () => { pid: number; exe: string } | null;
+  agentPrompt?: AgentPromptLike | null;
 }
 
 const MAX_SECONDS = 10 * 60;
@@ -138,6 +147,17 @@ export class Dictation extends EventEmitter {
     const s = this.d.settings();
     try {
       const r = await engine.transcribe(audio, s.language);
+      // „Prompt: …“ / „Ich mache jetzt einen Prompt …“ → build an Agent-Prompt instead of pasting (like the Mac: right after
+      // TextCleaner.applyRules, before list formatting; the original is saved at once)
+      const ap = this.d.agentPrompt;
+      if (ap && s.agentPrompts !== 'off') {
+        const cleaned = applyRules(r.text.trim(), s);
+        if (cleaned && ap.consume(cleaned, { duration: sec, exe: this.app, cap })) {
+          log(`dictation: ${sec.toFixed(1)} s audio, asr ${r.ms} ms, ${wordCount(cleaned)} words, app ${this.app || '?'} → Agent-Prompt`);
+          this.emit('agentPrompt');
+          return;
+        }
+      }
       const text = processTranscript(r.text, {
         removeFillers: s.removeFillers, voiceCommands: s.voiceCommands, dictionary: s.dictionary, polish: s.polish,
         target: targetForExe(this.app),
@@ -175,6 +195,7 @@ export class Dictation extends EventEmitter {
         this.d.history.add({ text, raw: r.text, app: this.app, durationSec: Math.round(sec * 10) / 10, words: wordCount(text), ms: r.ms });
       }
       this.emit('dictated', text);
+      ap?.offerLater(text, { duration: sec, exe: this.app, prep });
     } catch (e) {
       log('dictation failed', e);
       this.d.pill.toast(String(e instanceof Error ? e.message : e).slice(0, 80), 'error');

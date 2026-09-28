@@ -1,6 +1,6 @@
 // Global keyboard hook (uiohook-napi) → HoldToTalk state machine. Disabled with --no-hotkey.
 import { HoldToTalk, type HoldCallbacks } from './hotkey/holdToTalk';
-import { comboFor, comboUsesWin } from './hotkey/keycodes';
+import { comboFor, comboUsesWin, K } from './hotkey/keycodes';
 import type { HotkeyChoice } from '../shared/settings';
 import { log } from './log';
 
@@ -14,6 +14,8 @@ export class HotkeyService {
   /** while Flow injects keys (Ctrl+V), hook events are ignored */
   private injectingUntil = 0;
   onComboDown: () => void = () => {};
+  /** Esc while no dictation runs (Agent-Prompt card) */
+  onEscape: () => void = () => {};
 
   constructor(private choice: HotkeyChoice, cb: HoldCallbacks, doubleTap: boolean) {
     this.machine = new HoldToTalk(comboFor(choice), { ...cb, onComboDown: () => this.onComboDown() }, { doubleTap });
@@ -27,7 +29,13 @@ export class HotkeyService {
 
       const { uIOhook } = require('uiohook-napi');
       this.hook = uIOhook;
-      uIOhook.on('keydown', (e: { keycode: number }) => { if (Date.now() >= this.injectingUntil) this.machine.keyDown(e.keycode); });
+      uIOhook.on('keydown', (e: { keycode: number }) => {
+        if (Date.now() < this.injectingUntil) return;
+        const idle = this.machine.current === 'idle';
+        const repeat = this.machine.keysDown.has(e.keycode);
+        this.machine.keyDown(e.keycode);
+        if (e.keycode === K.Escape && idle && !repeat) { try { this.onEscape(); } catch (err) { log('hotkey: escape', err); } }
+      });
       // key-ups always count (keeps the pressed set honest); injected key-downs are ignored
       uIOhook.on('keyup', (e: { keycode: number }) => this.machine.keyUp(e.keycode));
       uIOhook.start();

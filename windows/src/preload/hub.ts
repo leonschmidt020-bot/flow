@@ -40,6 +40,12 @@ contextBridge.exposeInMainWorld('flow', {
     setSettings: (p: unknown) => ipcRenderer.invoke('meeting:setSettings', p),
     onState: (cb: (s: unknown) => void) => on('meeting:state', cb),
   },
+  prompts: {
+    list: () => ipcRenderer.invoke('prompts:list'),
+    delete: (id: string) => ipcRenderer.invoke('prompts:delete', id),
+    copy: (id: string, which: 'prompt' | 'original') => ipcRenderer.invoke('prompts:copy', id, which),
+    onChanged: (cb: () => void) => on('prompts:changed', () => cb()),
+  },
   clipvault: {
     invoke: (name: string, ...args: unknown[]) => ipcRenderer.invoke('clipvault:' + name, ...args),
     on: (name: string, cb: (p: unknown) => void) => on('clipvault:event:' + name, cb),

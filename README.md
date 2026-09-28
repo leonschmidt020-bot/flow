@@ -36,6 +36,8 @@ Details, Voraussetzungen und Deinstallation: [mac/README.md](mac/README.md).
 
 - Alles bleibt auf deinem Rechner: Audio, Texte, Verlauf, Wörterbuch.
 - Netz nur für den einmaligen Modell-Download und die Update-Prüfung (GitHub).
+- **Agent-Prompts** („Prompt: …“): Text geht nur dann an Anthropic, wenn du „Prompt: …“ sagst oder auf „Prompt bauen“ klickst –
+  und nur über deine **eigene** Claude-CLI (optional). Ohne sie baut Flow den Prompt lokal nach Regeln.
 - ClipVault-**Teilen** mit einem Freund ist optional und standardmäßig **aus**. Es läuft Ende-zu-Ende verschlüsselt über einen
   **eigenen** kostenlosen Cloudflare Worker ([Anleitung](mac/clipvault/sync-worker/README.md)). Mac und Windows können
   denselben Tresor teilen.
@@ -58,5 +60,7 @@ search, images, pins and collections.
   `curl -fsSL https://raw.githubusercontent.com/leonschmidt020-bot/flow/main/mac/install-mac.sh | bash` – hold **fn** to dictate.
   See [mac/README.md](mac/README.md).
 - Optional end-to-end encrypted ClipVault sharing via your own free Cloudflare Worker (off by default).
+- **Agent prompts** (“Prompt: …”): text goes to Anthropic only when you say “Prompt: …” or click “Build prompt”, and only through
+  your **own** Claude CLI (optional); without it Flow builds the prompt locally by rules.
 
 Flow is an independent project and is **not affiliated with Wispr**. License: MIT.

@@ -1,5 +1,6 @@
 // Settings schema, defaults and migration (pure – shared by main and renderer, unit-tested).
 import type { DictEntry } from '../core/textCleaner';
+import { AP_MODES, type APMode } from './agentPrompt';
 
 export const SETTINGS_VERSION = 2;
 
@@ -34,6 +35,8 @@ export interface Settings {
   mouseTargetHighlight: boolean;
   /** word learner: watch the field after pasting, ask „Wort gelernt?“ */
   learnFromEdits: boolean;
+  /** Agent-Prompts: „Prompt: …“ builds a prompt; „on“ also offers it for long tasks (only with the Claude CLI) */
+  agentPrompts: APMode;
   dictionary: DictEntry[];
   onboardingDone: boolean;
 }
@@ -59,6 +62,7 @@ export const DEFAULTS: Settings = {
   mouseTargetAutoSend: false,
   mouseTargetHighlight: true,
   learnFromEdits: true,
+  agentPrompts: 'on',
   dictionary: [],
   onboardingDone: false,
 };
@@ -133,6 +137,7 @@ export function migrateSettings(raw: unknown): Settings {
     mouseTargetAutoSend: bool(r.mouseTargetAutoSend, DEFAULTS.mouseTargetAutoSend),
     mouseTargetHighlight: bool(r.mouseTargetHighlight, DEFAULTS.mouseTargetHighlight),
     learnFromEdits: bool(r.learnFromEdits, DEFAULTS.learnFromEdits),
+    agentPrompts: oneOf(r.agentPrompts, AP_MODES, DEFAULTS.agentPrompts),
     dictionary: sanitizeDictionary(r.dictionary),
     onboardingDone: bool(r.onboardingDone, false),
   };

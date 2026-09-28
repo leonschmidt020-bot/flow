@@ -38,7 +38,7 @@ Context (see `contract.ts`, the source of truth):
 | `onToast(message, kind?)` | Shows a toast in the Flow pill (`kind`: `'info' | 'success' | 'error'`). Short German text. |
 | `locale` | `'de' | 'en'` (UI language setting). |
 | `isFlowWritingClipboard()` | `true` while Flow is inserting a dictation via the clipboard (save → write → Ctrl+V → restore, ~400 ms). **Ignore clipboard changes while this is true**, otherwise every dictation and every restore lands in the history. Flow also calls `ctx` hooks below. |
-| `onFlowClipboardWrite(cb)` | Optional push version: `cb({ text, phase: 'insert' | 'restore' | 'keep' })`. `'keep'` = user setting "Diktat bleibt in der Zwischenablage" – you MAY add that one to the history. Returns unsubscribe. |
+| `onFlowClipboardWrite(cb)` | Optional push version: `cb({ text, phase: 'insert' | 'restore' | 'keep', source? })`. `'keep'` = user setting "Diktat bleibt in der Zwischenablage" (and Agent-Prompts' copies) – you MAY add that one to the history, labelled `source` (default „Diktat“; Agent-Prompts: „Diktat (Original)“ / „Agent-Prompt“). Returns unsubscribe. |
 | `sendToUi(channel, payload)` | Pushes an event to every mounted ClipVault UI (Hub page). Arrives in the UI as `api.on(channel, cb)`. |
 | `log(...args)` | Writes to Flow's log file (`<userData>/logs/flow.log`). No `console.log` spam. |
 | `isDev` | true in dev / tests. |

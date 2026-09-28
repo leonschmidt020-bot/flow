@@ -7,6 +7,8 @@ import { demoState } from './demo';
 import { notetakerPage, NOTETAKER_ICON, type MeetingApi } from './notetaker';
 import { demoMeetingApi } from './notetakerDemo';
 import { mt } from '../../meeting/i18n';
+import { demoPromptsApi, promptSettingsRows, promptsPage, PROMPTS_ICON, type PromptsApi } from './prompts';
+import { apt } from '../../agentPrompt/i18n';
 
 interface FlowApi {
   getState(): Promise<HubState>;
@@ -24,13 +26,14 @@ interface FlowApi {
   onNavigate(cb: (p: string) => void): () => void;
   clipvault: { invoke(name: string, ...a: unknown[]): Promise<unknown>; on(name: string, cb: (p: unknown) => void): () => void };
   meeting?: MeetingApi;
+  prompts?: PromptsApi;
 }
 const q = new URLSearchParams(location.search);
 const RENDER = q.has('render');
 const api: FlowApi = (window as unknown as { flow?: FlowApi }).flow ?? mockApi();
 
 let S: HubState;
-type Page = 'history' | 'notetaker' | 'dictionary' | 'clipvault' | 'settings';
+type Page = 'history' | 'notetaker' | 'prompts' | 'dictionary' | 'clipvault' | 'settings';
 let page: Page = (q.get('page') as Page) || 'history';
 const L = () => S.settings.locale;
 const t = (k: I18nKey, v?: Record<string, string | number>) => tr(L(), k, v);
@@ -64,14 +67,15 @@ const I = {
   search: '<circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   notetaker: NOTETAKER_ICON,
+  prompts: PROMPTS_ICON,
 };
 
 // ── sidebar ──
 function renderNav() {
   const nav = document.getElementById('nav')!;
-  nav.replaceChildren(...(['history', 'notetaker', 'dictionary', 'clipvault', 'settings'] as Page[]).map((p) =>
+  nav.replaceChildren(...(['history', 'notetaker', 'prompts', 'dictionary', 'clipvault', 'settings'] as Page[]).map((p) =>
     h('button', { class: 'nav-item' + (p === page ? ' active' : ''), on: { click: () => go(p) } }, svg(I[p]),
-      p === 'notetaker' ? mt(L(), 'nav') : t(p === 'history' ? 'navHistory' : p === 'dictionary' ? 'navDictionary' : p === 'clipvault' ? 'navClipVault' : 'navSettings'))));
+      p === 'notetaker' ? mt(L(), 'nav') : p === 'prompts' ? apt(L(), 'nav') : t(p === 'history' ? 'navHistory' : p === 'dictionary' ? 'navDictionary' : p === 'clipvault' ? 'navClipVault' : 'navSettings'))));
 }
 
 function asrLine(): { text: string; sub: string; dot: string; progress: number | null } {
@@ -248,6 +252,12 @@ function settingsPage(): PageView {
     modelBtn.style.display = st === 'missing' || st === 'error' ? '' : 'none';
   });
   const hkOpts: [string, string][] = HOTKEYS.map((k) => [k, hotkeyName(L(), k)]);
+  // Agent-Prompts: mode + how it works (text depends on whether the Claude CLI is there)
+  const agentBox = h('div', { class: 'card' });
+  const drawAgent = () => agentBox.replaceChildren(...promptSettingsRows({
+    loc: L(), mode: S.settings.agentPrompts, claude: !!S.claudeCli, row, set: (m) => void set({ agentPrompts: m }),
+  }));
+  drawAgent(); syncers.push(drawAgent);
   // sub-options of „Text dorthin, wo die Maus ist“ are greyed out while it is off
   const dependent = (r: HTMLElement) => { const f = () => r.classList.toggle('off', !S.settings.mouseTarget); f(); syncers.push(f); return r; };
   const el = h('div', null,
@@ -273,6 +283,7 @@ function settingsPage(): PageView {
       dependent(row(t('mouseTargetAutoSend'), t('mouseTargetAutoSendDesc'), sw('mouseTargetAutoSend'))),
       dependent(row(t('mouseTargetHighlight'), t('mouseTargetHighlightDesc'), sw('mouseTargetHighlight'))),
       row(t('learnEdits'), t('learnEditsDesc'), sw('learnFromEdits')))),
+    h('div', { class: 'section' }, h('h2', null, apt(L(), 'secAgent')), agentBox),
     h('div', { class: 'section' }, h('h2', null, t('secSystem')), h('div', { class: 'card' },
       row(t('autostart'), null, sw('startWithWindows')),
       row(t('pillVisible'), t('pillVisibleDesc'), sw('pillAlwaysVisible')),
@@ -301,6 +312,13 @@ function clipVaultPage(): PageView {
 }
 
 const meetingApi: MeetingApi = api.meeting ?? demoMeetingApi(q.get('mstate') ?? 'ready');
+const promptsApi: PromptsApi = api.prompts ?? demoPromptsApi(q.get('pstate') ?? 'ready');
+let promptSelect: string | null = q.get('select');
+function promptPage(): PageView {
+  const v = promptsPage({ api: promptsApi, loc: L, initialSelect: promptSelect, render: RENDER, showOriginal: q.get('orig') === '1' });
+  promptSelect = null;
+  return v;
+}
 let meetingSelect: string | null = q.get('select');
 function meetingPage(): PageView {
   const v = notetakerPage({ api: meetingApi, loc: L, hotkeysDisabled: S.hotkeysDisabled, toast: () => {}, initialSelect: meetingSelect, render: RENDER });
@@ -311,7 +329,7 @@ function meetingPage(): PageView {
 function go(p: Page) {
   view?.dispose?.();
   page = p;
-  view = p === 'history' ? historyPage() : p === 'notetaker' ? meetingPage() : p === 'dictionary' ? dictionaryPage() : p === 'clipvault' ? clipVaultPage() : settingsPage();
+  view = p === 'history' ? historyPage() : p === 'notetaker' ? meetingPage() : p === 'prompts' ? promptPage() : p === 'dictionary' ? dictionaryPage() : p === 'clipvault' ? clipVaultPage() : settingsPage();
   const box = document.getElementById('page')!;
   box.replaceChildren(view.el);
   box.scrollTop = 0;
@@ -338,7 +356,8 @@ function mockApi(): FlowApi {
   api.onNavigate((p) => {
     // "notetaker:<id>" selects a meeting
     const [pg, id] = String(p).split(':');
-    if (id) meetingSelect = id;
+    if (id && pg === 'prompts') promptSelect = id;
+    else if (id) meetingSelect = id;
     go(pg as Page);
   });
   go(page);

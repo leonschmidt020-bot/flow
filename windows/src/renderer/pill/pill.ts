@@ -1,5 +1,8 @@
 // The pill: a small capsule at the bottom of the screen. Drawn on a canvas, closely following the Mac pill
 // (Sources/Murmur/Pill.swift): idle strip 44×9, listening 66×24 with 9 bars, hands-free 112×26 with ✕/■, transcribing dots.
+// Cards: meeting card (canvas) > Agent-Prompt card (DOM, apCard.ts, right of the capsule) > learner card (DOM, above).
+import { AgentCard } from './apCard';
+import type { APAction, APCardMessage, APCardView, APFlash } from '../../shared/agentPrompt';
 type Mode = 'idle' | 'recording' | 'handsfree' | 'transcribing' | 'loading' | 'hidden';
 /** notetaker card (canvas) – has priority over the learner card (DOM, below) */
 interface MeetingCard { kind: string; title: string; sub: string; yes: string; no: string }
@@ -8,6 +11,8 @@ interface PillState {
   meeting?: { startedAt: number; label: string } | null;
   task?: { label: string; progress: number } | null;
   meetingCard?: MeetingCard | null;
+  /** an Agent-Prompt is being built (pill shows lilac dots while it rests) */
+  apBusy?: boolean;
 }
 interface Toast { text: string; kind?: 'info' | 'success' | 'error'; ms?: number }
 interface Card { id: number; title: string; text: string; options: string[]; save: string; no: string; timeoutMs: number }
@@ -21,6 +26,10 @@ interface PillApi {
   drop?(files: File[]): void;
   onCard?(cb: (c: Card | null) => void): void;
   answerCard?(a: CardAnswer): void;
+  onAgent?(cb: (m: APCardMessage | null) => void): void;
+  onAgentFlash?(cb: (f: APFlash) => void): void;
+  agentAction?(a: APAction): void;
+  agentHover?(on: boolean): void;
   ready(): void;
 }
 const api = (window as unknown as { flowPill?: PillApi }).flowPill;
@@ -52,6 +61,7 @@ function targetSize(): [number, number] {
   if (state.mode === 'idle' && dragging) return [150, 28];
   if (state.mode === 'idle' && state.task) return [Math.max(176, textW(state.task.label, 11.5, 600) + 44), 28];
   if (state.mode === 'idle' && state.meeting) return [Math.ceil(textW(state.meeting.label + ' · 00:00', 11.5, 600)) + 62, 26];
+  if (state.mode === 'idle' && state.apBusy) return [66, 24];
   switch (state.mode) {
     case 'idle': return [44, 9];
     case 'recording': case 'transcribing': return [66, 24];
@@ -62,7 +72,7 @@ function targetSize(): [number, number] {
 }
 function targetAlpha() {
   if (state.mode === 'hidden') return 0;
-  if (state.mode === 'idle' && !state.alwaysVisible && !state.meeting && !state.task && !dragging) return 0;
+  if (state.mode === 'idle' && !state.alwaysVisible && !state.meeting && !state.task && !state.apBusy && !dragging) return 0;
   return 1;
 }
 function textW(s: string, size: number, weight: number) {
@@ -105,7 +115,7 @@ function drawBars(cx: number, cy: number, count: number, maxH: number, t: number
   }
 }
 
-function drawDots(cx: number, cy: number, t: number) {
+function drawDots(cx: number, cy: number, t: number, rgb = '255,255,255') {
   const count = 5, spacing = 6, radius = 1.6;
   const total = (count - 1) * spacing;
   for (let i = 0; i < count; i++) {
@@ -113,7 +123,7 @@ function drawDots(cx: number, cy: number, t: number) {
     const ph = t * 6.5 - i * 0.75;
     const dy = Math.sin(ph) * 3;
     const a = 0.45 + 0.55 * (0.5 + 0.5 * Math.sin(ph));
-    g.fillStyle = `rgba(255,255,255,${alpha * a})`;
+    g.fillStyle = `rgba(${rgb},${alpha * a})`;
     g.beginPath(); g.arc(x, cy + dy, radius, 0, Math.PI * 2); g.fill();
   }
 }
@@ -177,7 +187,7 @@ function frame() {
   mhot = [];
 
   if (alpha > 0.005) {
-    const idleStrip = state.mode === 'idle' && !state.meeting && !state.task && !dragging;
+    const idleStrip = state.mode === 'idle' && !state.meeting && !state.task && !state.apBusy && !dragging;
     // shadow + fill
     g.save();
     g.shadowColor = `rgba(0,0,0,${0.35 * alpha})`;
@@ -215,6 +225,8 @@ function frame() {
       g.fillStyle = `rgba(255,255,255,${0.95 * alpha})`;
       g.beginPath(); g.roundRect(sx - 3, cy - 3, 6, 6, 1.3); g.fill();
       mhot.push({ id: 'meetingStop', r: new DOMRect(sx - 11, cy - 11, 22, 22) }, { id: 'meetingOpen', r: new DOMRect(x, y, w - 26, h) });
+    } else if (state.mode === 'idle' && state.apBusy) {
+      drawDots(cx, cy, t, '189,161,255');
     } else if (state.mode === 'recording') drawBars(cx, cy, 9, h - 9, t, smooth);
     else if (state.mode === 'handsfree') {
       // ✕ left, ■ (red) right, bars in the middle
@@ -249,6 +261,12 @@ function frame() {
   cardAlpha += ((state.meetingCard ? 1 : 0) - cardAlpha) * 0.25;
   if (state.meetingCard && cardAlpha > 0.02) drawMeetingCard(state.meetingCard, W, H, cardAlpha);
 
+  // Agent-Prompt card: next to the capsule; steps aside for the meeting card, pushes the learner card away
+  ap.setHidden(!!state.meetingCard);
+  ap.layout(W, H, { x, y, w, h });
+  const apShown = ap.visible;
+  if (apShown !== apWasShown) { apWasShown = apShown; syncLearnerAway(); }
+
   // toast above the pill
   if (toast) {
     const now = performance.now();
@@ -259,7 +277,10 @@ function frame() {
       const hasDot = toast.kind === 'error' || toast.kind === 'success';
       const tw3 = Math.min(W - 24, g.measureText(toast.text).width + 28 + (hasDot ? 12 : 0));
       const ty = cy - 13 - 10 - 24 + (1 - life) * 4 - cardLift();
-      const txx = cx - tw3 / 2;
+      let txx = cx - tw3 / 2;
+      // Agent-Prompt card to the right/left of the capsule: the toast moves aside instead of hiding under it
+      if (ap.visible && ap.side === 'right') txx = Math.max(12, Math.min(txx, ap.rect().left - 10 - tw3));
+      if (ap.visible && ap.side === 'left') txx = Math.min(W - 12 - tw3, Math.max(txx, ap.rect().right + 10));
       g.save();
       g.shadowColor = `rgba(0,0,0,${0.3 * life})`; g.shadowBlur = 12; g.shadowOffsetY = 3;
       capsule(txx, ty, tw3, 24);
@@ -268,7 +289,7 @@ function frame() {
       capsule(txx + 0.5, ty + 0.5, tw3 - 1, 23);
       g.strokeStyle = `rgba(255,255,255,${0.25 * life})`; g.lineWidth = 1; g.stroke();
       const dot = toast.kind === 'error' ? '255,99,90' : toast.kind === 'success' ? '120,220,150' : '';
-      let textX = cx;
+      let textX = txx + tw3 / 2;
       if (dot) {
         g.fillStyle = `rgba(${dot},${life})`;
         g.beginPath(); g.arc(txx + 13, ty + 12, 3, 0, Math.PI * 2); g.fill();
@@ -283,11 +304,17 @@ function frame() {
 }
 requestAnimationFrame(frame);
 
-// click-through except over the hands-free buttons
+// click-through except over the hands-free buttons and the cards
 addEventListener('mousemove', (e) => {
-  const over = [hot.cancel, hot.stop, ...mhot.map((m) => m.r)].some((r) => r && e.clientX >= r.x && e.clientX <= r.right && e.clientY >= r.y && e.clientY <= r.bottom) || overCard(e.clientX, e.clientY);
+  const onAp = ap.hit(e.clientX, e.clientY);
+  ap.pointer(onAp);
+  const over = [hot.cancel, hot.stop, ...mhot.map((m) => m.r)].some((r) => r && e.clientX >= r.x && e.clientX <= r.right && e.clientY >= r.y && e.clientY <= r.bottom) || overCard(e.clientX, e.clientY) || onAp;
   if (over !== interactive) { interactive = over; api?.setInteractive(over); }
   document.body.style.cursor = over ? 'pointer' : 'default';
+});
+document.addEventListener('mouseleave', () => {
+  ap.pointer(false);
+  if (interactive) { interactive = false; api?.setInteractive(false); }
 });
 addEventListener('mousedown', (e) => {
   const inside = (r: DOMRect | null) => !!r && e.clientX >= r.x && e.clientX <= r.right && e.clientY >= r.y && e.clientY <= r.bottom;
@@ -308,6 +335,15 @@ addEventListener('drop', (e) => {
 
 // ── question card („Wort gelernt?“) ──
 const cardEl = document.getElementById('card') as HTMLDivElement;
+
+// ── Agent-Prompt card ──
+const q0 = new URLSearchParams(location.search);
+const apStill = q0.has('ap') ? { hovering: q0.get('aphover') === '1', showOriginal: q0.get('aporig') === '1', illustration: q0.get('apillu') ?? undefined, elapsed: Number(q0.get('apsecs') ?? 6) } : undefined;
+const ap = new AgentCard(document.body, {
+  action: (a) => api?.agentAction?.(a),
+  hover: (on) => api?.agentHover?.(on),
+}, { still: apStill });
+let apWasShown = false;
 let card: Card | null = null;
 let choice = '';
 let cardLeft = 0;      // ms of the timeout still to go
@@ -323,7 +359,11 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, text?: s
 }
 function cardVisible() { return !!card && !cardEl.hidden && !cardEl.classList.contains('away'); }
 /** toasts sit above whichever card is shown */
-function cardLift() { return state.meetingCard ? 58 + 8 : cardVisible() ? cardEl.getBoundingClientRect().height + 8 : 0; }
+function cardLift() {
+  if (state.meetingCard) return 58 + 8;
+  if (ap.visible && ap.side === 'above') return ap.rect().height + 22;
+  return cardVisible() ? cardEl.getBoundingClientRect().height + 8 : 0;
+}
 function overCard(x: number, y: number) {
   if (!cardVisible()) return false;
   const r = cardEl.getBoundingClientRect();
@@ -386,11 +426,14 @@ function showCard(c: Card | null) {
   }
 }
 
+function syncLearnerAway() {
+  // while dictating the card steps aside (the pill needs the attention), afterwards it comes back
+  // …and it never shows while a meeting is recorded, a meeting card is up or the Agent-Prompt card is shown (priority)
+  cardEl.classList.toggle('away', (state.mode !== 'idle' && state.mode !== 'hidden') || !!state.meeting || !!state.meetingCard || ap.visible);
+}
 function setState(s: PillState) {
   state = { ...state, ...s };
-  // while dictating the card steps aside (the pill needs the attention), afterwards it comes back
-  // …and it never shows while a meeting is recorded or a meeting card is up (meeting card has priority)
-  cardEl.classList.toggle('away', (state.mode !== 'idle' && state.mode !== 'hidden') || !!state.meeting || !!state.meetingCard);
+  syncLearnerAway();
 }
 function showToast(tt: Toast) { const now = performance.now(); toast = { text: tt.text, kind: tt.kind ?? 'info', born: now, until: now + (tt.ms ?? 2200) }; }
 function setLevel(lv: number) { level = Math.min(1, lv * 9); }
@@ -399,6 +442,13 @@ api?.onState(setState);
 api?.onLevel(setLevel);
 api?.onToast(showToast);
 api?.onCard?.(showCard);
+api?.onAgent?.((m) => {
+  ap.set(m);
+  syncLearnerAway();
+  // card gone → click-through again (the next mousemove turns it back on over anything else that is clickable)
+  if (!m) setTimeout(() => { if (interactive && !ap.visible) { interactive = false; api?.setInteractive(false); document.body.style.cursor = 'default'; } }, 340);
+});
+api?.onAgentFlash?.((f) => ap.flash(f));
 api?.ready();
 
 // render-check hooks (offscreen screenshots)
@@ -417,8 +467,10 @@ if (q.has('render')) {
   if (mode === 'recording' || mode === 'handsfree') { level = 0.6; smooth = 0.6; setInterval(() => { level = 0.35 + Math.random() * 0.5; }, 60); }
   if (q.get('toast')) showToast({ text: q.get('toast')!, kind: (q.get('kind') as Toast['kind']) ?? 'info', ms: 60000 });
   if (q.get('card')) { try { showCard(JSON.parse(q.get('card')!) as Card); } catch { /* bad fixture */ } }
+  if (q.get('ap')) { try { ap.set({ seq: 1, view: JSON.parse(q.get('ap')!) as APCardView, locale: q.get('lang') === 'en' ? 'en' : 'de' }); } catch { /* bad fixture */ } }
+  if (q.get('apbusy')) state.apBusy = true;
   setState({ mode });
 }
-(window as unknown as { __pill: unknown }).__pill = { setState, showToast, setLevel, showCard };
+(window as unknown as { __pill: unknown }).__pill = { setState, showToast, setLevel, showCard, ap };
 
 export {};

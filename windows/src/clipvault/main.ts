@@ -74,7 +74,7 @@ export async function initClipVault(ctx: ClipVaultContext): Promise<ClipVaultHan
   let offFlow: (() => void) | null = null;
   try {
     offFlow = ctx.onFlowClipboardWrite((w) => {
-      if (w.phase === 'keep' && w.text.trim()) store.addText(w.text, 'Diktat');
+      if (w.phase === 'keep' && w.text.trim()) store.addText(w.text, w.source || 'Diktat');
       void watcher.skipCurrent(); // insert/restore: never history
     });
   } catch { offFlow = null; }

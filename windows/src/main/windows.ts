@@ -1,6 +1,7 @@
 // Pill (transparent, click-through, always on top, never focused) + Hub window.
 import { BrowserWindow, ipcMain, screen, shell } from 'electron';
 import { paths } from './paths';
+import { AP_ACTIONS, type APAction, type APCardMessage, type APFlash } from '../shared/agentPrompt';
 
 export type PillMode = 'idle' | 'recording' | 'handsfree' | 'transcribing' | 'loading' | 'hidden';
 export interface PillState {
@@ -10,6 +11,8 @@ export interface PillState {
   task?: { label: string; progress: number } | null;
   /** notetaker card („Teams erkannt · Meeting aufnehmen?“ / „Meeting vorbei?“) – has priority over the learner card */
   meetingCard?: { kind: string; title: string; sub: string; yes: string; no: string } | null;
+  /** an Agent-Prompt is being built (lilac dots while the pill rests) */
+  apBusy?: boolean;
 }
 export type PillClick = 'cancel' | 'stop' | 'meetingStop' | 'meetingOpen' | 'cardYes' | 'cardNo';
 /** a question card above the pill („Wort gelernt?“) – strings are already localised */
@@ -18,6 +21,8 @@ export interface PillCardAnswer { id: number; save: boolean; choice?: string; ti
 
 /** tall enough for the learner card above the capsule; the window is click-through except over buttons */
 export const PILL_W = 460, PILL_H = 230;
+/** while the Agent-Prompt card is up: room for the 476 px card right of the capsule (up to 500 px tall + illustration) */
+export const PILL_AP_W = 1100, PILL_AP_H = 580;
 
 export class Pill {
   win: BrowserWindow | null = null;
@@ -34,6 +39,11 @@ export class Pill {
   private hoverTimer: NodeJS.Timeout | null = null;
   /** false in self-tests: never put anything on the screen */
   visible = true;
+  /** Agent-Prompt card: button clicks / mouse over the card (Esc while building cancels only then) */
+  onAgentAction: (a: APAction) => void = () => {};
+  agentHover = false;
+  private agentShown = false;
+  private agentShrink: NodeJS.Timeout | null = null;
 
   create() {
     const win = new BrowserWindow({
@@ -56,6 +66,11 @@ export class Pill {
     ipcMain.on('pill:interactive', (e, on: boolean) => { if (e.sender === win.webContents) { this.rendererInteractive = on; this.applyMouse(); } });
     ipcMain.on('pill:click', (e, what: PillClick) => { if (e.sender === win.webContents) this.onClick(what); });
     ipcMain.on('pill:drop', (e, files: string[]) => { if (e.sender === win.webContents && Array.isArray(files)) this.onDrop(files.map(String)); });
+    ipcMain.on('pill:apAction', (e, a: unknown) => {
+      if (e.sender !== win.webContents || typeof a !== 'string' || !(AP_ACTIONS as readonly string[]).includes(a)) return;
+      this.onAgentAction(a as APAction);
+    });
+    ipcMain.on('pill:apHover', (e, on: unknown) => { if (e.sender === win.webContents) this.agentHover = on === true; });
     ipcMain.on('pill:cardAnswer', (e, a: PillCardAnswer) => {
       if (e.sender !== win.webContents || !a || typeof a.id !== 'number') return;
       // the card is gone → click-through again (through the shared mouse model, the drop zone may still hold it)
@@ -91,15 +106,19 @@ export class Pill {
     this.win.setIgnoreMouseEvents(!on, { forward: true });
   }
 
-  /** bottom centre of the display that has the mouse cursor */
+  /** bottom centre of the display that has the mouse cursor (bigger while the Agent-Prompt card is up – the capsule
+   *  stays at the same spot: the window is centred and bottom-aligned either way) */
   place() {
     // display-metrics-changed kann nach dem Schließen der Pille noch feuern (Aufwachen, Monitorwechsel)
     if (!this.win || this.win.isDestroyed()) return;
     const d = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
     const wa = d.workArea;
-    const x = Math.round(wa.x + (wa.width - PILL_W) / 2);
-    const y = Math.round(wa.y + wa.height - PILL_H - 6);
-    this.win.setBounds({ x, y, width: PILL_W, height: PILL_H });
+    const W = this.agentShown ? Math.min(PILL_AP_W, wa.width) : PILL_W;
+    const Hh = this.agentShown ? Math.min(PILL_AP_H, wa.height - 6) : PILL_H;
+    const x = Math.round(wa.x + (wa.width - W) / 2);
+    const y = Math.round(wa.y + wa.height - Hh - 6);
+    const b = this.win.getBounds();
+    if (b.x !== x || b.y !== y || b.width !== W || b.height !== Hh) this.win.setBounds({ x, y, width: W, height: Hh });
   }
 
   private send(ch: string, p: unknown) {
@@ -119,6 +138,20 @@ export class Pill {
     if (c && this.visible) { this.place(); this.win?.showInactive(); this.win?.setAlwaysOnTop(true, 'screen-saver'); }
     this.send('pill:card', c);
   }
+  /** show / update (or with null: close) the Agent-Prompt card */
+  agentCard(m: APCardMessage | null) {
+    if (this.agentShrink) { clearTimeout(this.agentShrink); this.agentShrink = null; }
+    if (m) {
+      if (!this.agentShown) { this.agentShown = true; if (this.visible) { this.place(); this.win?.showInactive(); this.win?.setAlwaysOnTop(true, 'screen-saver'); } }
+      this.send('pill:ap', m);
+      return;
+    }
+    this.send('pill:ap', null);
+    this.agentHover = false;
+    // back to the small window after the closing animation (the card no longer needs the room)
+    this.agentShrink = setTimeout(() => { this.agentShrink = null; this.agentShown = false; this.place(); }, 420);
+  }
+  agentFlash(f: APFlash) { this.send('pill:apFlash', f); }
   toast(text: string, kind: 'info' | 'success' | 'error' = 'info', ms = 2200) { if (this.visible) { this.place(); this.win?.showInactive(); } this.send('pill:toast', { text, kind, ms }); }
   private onDisplay = () => this.place();
   destroy() { if (this.hoverTimer) clearInterval(this.hoverTimer); screen.removeListener('display-metrics-changed', this.onDisplay); this.win?.destroy(); this.win = null; }

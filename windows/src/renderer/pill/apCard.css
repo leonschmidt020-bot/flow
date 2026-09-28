@@ -1,0 +1,106 @@
+/* Agent-Prompt card (apCard.ts) – the Mac card's look: #111 card, hairline, soft shadow, 22 px corners, illustration tile */
+.ap-card {
+  --lilac: 189, 161, 255; --amber: 255, 199, 107; --mint: 219, 247, 230;
+  position: absolute; left: 0; bottom: 0; width: 476px; height: 148px; box-sizing: border-box; color: #fff;
+  font: 12.5px/1.35 "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+  transition: height .42s cubic-bezier(.3, 1.25, .5, 1);
+  transform-origin: left bottom; z-index: 5; user-select: none;
+}
+.ap-card[data-side="left"] { transform-origin: right bottom; }
+.ap-card[data-side="above"] { transform-origin: center bottom; }
+.ap-card[hidden] { display: none; }
+.ap-card.ap-away { visibility: hidden; pointer-events: none; }
+.ap-card.ap-in { animation: ap-grow .5s cubic-bezier(.2, 1.2, .35, 1) both; }
+.ap-card.ap-in .ap-content, .ap-card.ap-in .ap-tile { animation: ap-fade .45s ease-out .12s both; }
+.ap-card.ap-out { animation: ap-shrink .3s cubic-bezier(.5, 0, .75, .3) both; }
+.ap-card.ap-still, .ap-card.ap-still * { animation: none !important; transition: none !important; }
+@keyframes ap-grow { from { opacity: 0; transform: translateX(-18px) scale(.72, .5); } 40% { opacity: 1; } to { opacity: 1; transform: none; } }
+.ap-card[data-side="left"].ap-in { animation-name: ap-grow-l; }
+@keyframes ap-grow-l { from { opacity: 0; transform: translateX(18px) scale(.72, .5); } 40% { opacity: 1; } to { opacity: 1; transform: none; } }
+@keyframes ap-shrink { from { opacity: 1; transform: none; } to { opacity: 0; transform: scale(.85, .7); } }
+@keyframes ap-fade { from { opacity: 0; } to { opacity: 1; } }
+
+.ap-bg {
+  position: absolute; inset: 0; border-radius: 22px; background: #111;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .09), 0 10px 22px rgba(0, 0, 0, .32), 0 1px 3px rgba(0, 0, 0, .18);
+}
+.ap-content { position: absolute; inset: 0; display: flex; flex-direction: column; padding: 18px 16px 16px 22px; min-height: 0; }
+
+/* head: chip, title, short line */
+.ap-head { flex: none; height: 84px; padding-right: 110px; box-sizing: border-box; min-width: 0; }
+.ap-head-offer { height: 88px; }
+.ap-head-done { height: 98px; padding-right: 110px; }
+.ap-head-done.ap-head-orig { height: 84px; }
+.ap-chips { display: flex; align-items: center; gap: 6px; height: 19px; }
+.ap-chip { display: inline-flex; align-items: center; gap: 4px; height: 19px; padding: 0 7px; border-radius: 10px; font-size: 10px; font-weight: 700; letter-spacing: .8px; white-space: nowrap; }
+.ap-chip .ap-ci { width: 10px; height: 10px; stroke-width: 2.4; }
+.ap-lilac { color: rgb(var(--lilac)); background: rgba(var(--lilac), .14); }
+.ap-amber { color: rgb(var(--amber)); background: rgba(var(--amber), .14); }
+.ap-secs { font-size: 11px; font-weight: 500; color: rgba(255, 255, 255, .42); font-variant-numeric: tabular-nums; margin-left: 2px; }
+.ap-spacer { flex: 1; min-width: 4px; }
+.ap-title { margin-top: 8px; font-size: 15.5px; font-weight: 600; letter-spacing: -.1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ap-sub { margin-top: 3px; color: rgba(255, 255, 255, .66); line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.ap-sub-done { display: block; }
+.ap-goalline { display: block; color: rgba(255, 255, 255, .72); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ap-counts { display: block; margin-top: 3px; font-size: 11.5px; font-weight: 500; color: rgba(var(--lilac), .85); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* segment „Prompt | Original“ – sits left of the illustration */
+.ap-seg { display: inline-flex; padding: 2px; border-radius: 11px; background: rgba(0, 0, 0, .55); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .10); flex: none; }
+.ap-seg button { border: 0; margin: 0; height: 18px; padding: 0 8px; border-radius: 9px; font: 600 10.5px/18px inherit; font-family: inherit; color: rgba(255, 255, 255, .6); background: transparent; cursor: pointer; }
+.ap-seg button.on { background: rgba(255, 255, 255, .92); color: #000; }
+
+/* preview */
+.ap-flex { flex: 1; }
+.ap-preview { position: relative; flex: 1; min-height: 0; margin: 2px 0 12px; border-radius: 14px; background: rgba(255, 255, 255, .045); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .07); overflow: hidden; }
+.ap-scroll-in { position: absolute; inset: 0; overflow-y: auto; padding: 12px 14px 16px; box-sizing: border-box; overscroll-behavior: contain; }
+.ap-scroll-in::-webkit-scrollbar { width: 0; }
+.ap-card.ap-hover .ap-scroll-in::-webkit-scrollbar { width: 8px; }
+.ap-scroll-in::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, .16); border-radius: 8px; border: 2px solid transparent; background-clip: padding-box; }
+.ap-fade { position: absolute; left: 0; right: 0; bottom: 0; height: 26px; pointer-events: none; background: linear-gradient(rgba(17, 17, 17, 0), rgba(17, 17, 17, .95)); transition: opacity .2s; }
+.ap-card.ap-hover[data-kind="done"] .ap-fade { opacity: 0; }
+.ap-orig { font-size: 12.5px; line-height: 1.55; color: rgba(255, 255, 255, .84); white-space: pre-wrap; overflow-wrap: anywhere; }
+.ap-h { font-size: 9.5px; font-weight: 700; letter-spacing: 1px; color: rgba(var(--lilac), .9); margin: 5px 0 3px; }
+.ap-goal { font-size: 12px; font-weight: 500; line-height: 1.45; color: rgba(255, 255, 255, .92); margin-bottom: 3px; overflow-wrap: anywhere; }
+.ap-goal b { font-weight: 700; color: #fff; }
+.ap-item, .ap-text { font: 11.5px/1.5 "Cascadia Mono", "Cascadia Code", Consolas, "SF Mono", Menlo, monospace; color: rgba(255, 255, 255, .84); margin-bottom: 3px; padding-left: 1.9em; text-indent: -1.9em; overflow-wrap: anywhere; }
+.ap-text { color: rgba(255, 255, 255, .78); padding-left: 0; text-indent: 0; }
+.ap-blank { height: 2px; }
+
+/* building: folding lines → live text, sweep at the bottom */
+.ap-fold { position: absolute; left: 14px; top: 14px; right: 14px; bottom: 14px; width: calc(100% - 28px); height: calc(100% - 28px); }
+.ap-live { position: absolute; inset: 0; overflow: hidden; padding: 12px 14px 10px; box-sizing: border-box; display: none;
+  -webkit-mask-image: linear-gradient(transparent 0, #000 18%, #000 100%); mask-image: linear-gradient(transparent 0, #000 18%, #000 100%); }
+.ap-has-text .ap-live { display: block; }
+.ap-has-text .ap-fold { display: none; }
+.ap-caret { display: block; width: 7px; height: 12px; border-radius: 1px; margin: 2px 0 6px; background: rgb(var(--lilac)); animation: ap-blink 1s steps(1) infinite; }
+@keyframes ap-blink { 50% { opacity: .25; } }
+.ap-sweep { position: absolute; left: 1px; right: 1px; bottom: 0; height: 2px; border-radius: 2px; overflow: hidden; background: rgba(255, 255, 255, .06); }
+.ap-sweep i { position: absolute; top: 0; bottom: 0; width: 140px; left: -140px; border-radius: 2px;
+  background: linear-gradient(90deg, transparent, rgba(var(--lilac), .9), #fff, rgba(var(--lilac), .9), transparent); animation: ap-sweep 1.8s linear infinite; }
+@keyframes ap-sweep { from { transform: translateX(0); } to { transform: translateX(620px); } }
+
+/* buttons */
+.ap-buttons { flex: none; display: flex; align-items: center; gap: 6px; height: 30px; }
+.ap-btn { display: inline-flex; align-items: center; gap: 5px; height: 30px; padding: 0 13px; border: 0; border-radius: 15px; font: 600 12.5px/30px inherit; font-family: inherit; white-space: nowrap; cursor: pointer; flex: none; transition: background .12s, transform .08s, opacity .08s; }
+.ap-btn:active { transform: scale(.97); opacity: .72; }
+.ap-btn .ap-i { width: 13px; height: 13px; stroke-width: 2.3; }
+.ap-primary { background: #fff; color: #000; }
+.ap-primary:hover { background: rgba(255, 255, 255, .9); }
+.ap-primary.ap-done { background: rgb(var(--mint)); }
+.ap-secondary { background: rgba(255, 255, 255, .10); color: rgba(255, 255, 255, .92); }
+.ap-secondary:hover { background: rgba(255, 255, 255, .16); }
+.ap-ghost { background: transparent; color: rgba(255, 255, 255, .62); font-weight: 500; padding: 0 10px; }
+.ap-ghost:hover { background: rgba(255, 255, 255, .08); color: rgba(255, 255, 255, .9); }
+.ap-foot { font-size: 11px; color: rgba(255, 255, 255, .4); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.ap-foot-src { font-size: 10.5px; font-weight: 500; color: rgba(255, 255, 255, .38); }
+
+/* illustration tile (sticks out above the card) + ✕ */
+.ap-tile { position: absolute; right: 14px; top: -14px; width: 96px; height: 96px; border-radius: 16px; overflow: hidden;
+  box-shadow: 0 6px 12px rgba(0, 0, 0, .35), inset 0 0 0 1px rgba(255, 255, 255, .10); background: #ebdcf9; }
+.ap-tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.ap-tile::after { content: ''; position: absolute; inset: 0; border-radius: 16px; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .10); pointer-events: none; }
+.ap-x { position: absolute; top: 6px; right: 6px; width: 20px; height: 20px; border-radius: 50%; border: 0; padding: 0; display: grid; place-items: center; cursor: pointer;
+  background: rgba(255, 255, 255, .72); backdrop-filter: blur(8px); color: rgba(0, 0, 0, .75); z-index: 1; }
+.ap-x:hover { background: rgba(255, 255, 255, .92); }
+.ap-xi { width: 10px; height: 10px; stroke-width: 3; }
+.ap-head-stopped { height: 92px; }

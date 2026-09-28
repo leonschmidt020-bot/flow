@@ -143,17 +143,14 @@ final class MeetingController {
         }
     }
 
-    /// Während eines Anrufs nutzt die Anruf-App Apples Sprachverarbeitung – dann bekommt ein normales
-    /// Mikro nur Stille. Flow schaltet deshalb im Anruf selbst auf Sprachverarbeitung um.
+    /// Im Anruf NIE Apples Sprachverarbeitung einschalten: gemessen – dann bekommt eine Anruf-App ohne sie (z. B. Teams)
+    /// nur noch absolute Stille, die anderen im Meeting hören dich nicht. Stattdessen bleibt das Mikro normal und wird
+    /// bei Bedarf selbst verstärkt (MicCapture.callBoost) – kein Neustart, die Anruf-App merkt nichts.
     private func updateMicMode(callActive: Bool) {
         guard isRecording, let mc = mic, callActive != micUsesVP else { return }
         micUsesVP = callActive
-        mc.voiceProcessing = callActive
-        // asynchron auf der Mikro-Queue – blockiert die Oberfläche nicht
-        mc.ensureRunning(deviceUID: Settings.shared.micUID) { err, _, _ in
-            if let err { log("Meeting-Mikro Neustart fehlgeschlagen: \(err)") }
-        }
-        log("Meeting-Mikro: Sprachverarbeitung \(callActive ? "an (Anruf läuft)" : "aus")")
+        mc.callBoost = callActive
+        log("Meeting-Mikro: \(callActive ? "Anruf läuft – eigene Verstärkung an" : "normal")")
     }
 
     var callActive: Bool { !detector.active.isEmpty }
@@ -212,7 +209,8 @@ final class MeetingController {
         }
         mc.onLevel = { [weak self] lv in DispatchQueue.main.async { if case .meeting = self?.pill.view.mode { self?.pill.view.level = lv } } }
         micUsesVP = callActive
-        mc.voiceProcessing = micUsesVP
+        mc.voiceProcessing = false          // siehe updateMicMode – nie Sprachverarbeitung
+        mc.callBoost = micUsesVP
         do { try mc.start(deviceUID: Settings.shared.micUID) } catch {
             micWriter?.close(); sysWriter?.close(); micWriter = nil; sysWriter = nil
             try? FileManager.default.removeItem(at: m.folder)
@@ -220,7 +218,7 @@ final class MeetingController {
         }
         mic = mc
         if let first = detector.active.first { callApp = first.bundleID; callAppName = first.name }
-        log("Meeting-Mikro: Sprachverarbeitung \(micUsesVP ? "an (Anruf läuft)" : "aus")")
+        log("Meeting-Mikro: \(micUsesVP ? "Anruf läuft – eigene Verstärkung an" : "normal")")
 
         let st = SystemAudioTap()
         do {
@@ -418,7 +416,8 @@ enum MeetingProcessor {
                 segments += assign(words: words, turns: turns, keyMap: keyMap)
             }
             sys = []
-            let mic = WavWriter.read(m.micURL)
+            // Leise Spur (Anruf-App mit Sprachverarbeitung) vor der Sprach-Messung angleichen – sonst zählt sie als stumm
+            let mic = Transcriber.normalized(WavWriter.read(m.micURL))
             let micSpeech = speechSeconds(mic)
             log(String(format: "Auswertung %@: Mikro %.0fs Sprache, System %.0fs Sprache", id, micSpeech, sysSpeech))
             if micSpeech > 1 {

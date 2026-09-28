@@ -442,7 +442,7 @@ extension VFNotice {
     /// Meeting-Transkript / Zusammenfassung fertig
     static func transcriptReady(title: String, open: @escaping () -> Void, illustration: String = "illu_insights") -> VFNotice {
         VFNotice(id: "transkript_fertig", title: "Transkript fertig",
-                 text: "„\(title)“ ist zusammengefasst und bereit.",
+                 text: "„\(title)“ – Zusammenfassung und Transkript sind bereit.",
                  illustration: illustration, fallbackSymbol: VFNotify.symbol(for: illustration),
                  primary: ("Öffnen", open), secondary: nil, timeout: 15)
     }
@@ -641,7 +641,7 @@ struct VFNotifyCardContent: View {
                         .font(.system(size: 13))
                         .foregroundStyle(.white.opacity(0.72))
                         .lineSpacing(2)
-                        .lineLimit(2)
+                        .lineLimit(3)   // 28.09.: „… ist zusammengefasst un…“ wurde nach 2 Zeilen abgeschnitten
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.top, 5)
                 }

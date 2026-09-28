@@ -25,7 +25,7 @@ final class DictationController {
     /// Zeitpunkt, an dem fn losgelassen wurde (für die Tempo-Zeile im Protokoll und die Tempo-Garantie)
     private var releasedAt = Date()
     private var tempoMark = 0
-    /// Läuft gerade ein Anruf? Dann Mikro mit Sprachverarbeitung (sonst liefert es nur Stille)
+    /// Läuft gerade ein Anruf? Dann eigene Verstärkung (MicCapture.callBoost) – nie Apples Sprachverarbeitung
     var callActive: () -> Bool = { false }
 
     // Erkennung schon während des Sprechens: fertige Stücke (bis zur letzten Pause) laufen im Hintergrund
@@ -138,9 +138,12 @@ final class DictationController {
         // stehen → das NÄCHSTE normale Diktat wurde zur Claude-Anweisung für die alte Markierung. (.commandStart setzt
         // isCommand erst nach start() wieder.)
         isCommand = false; commandSel = nil
-        let wantVP = callActive()
-        if mic.voiceProcessing != wantVP { log("Diktat-Mikro: Sprachverarbeitung \(wantVP ? "an (Anruf läuft)" : "aus")") }
-        mic.voiceProcessing = wantVP
+        // Nie Apples Sprachverarbeitung einschalten – sie macht Anruf-Apps wie Teams stumm (28.09.2026 gemessen).
+        // Im Anruf stattdessen das (dann oft leise) Mikro selbst anheben.
+        let inCall = callActive()
+        if mic.callBoost != inCall { log("Diktat-Mikro: \(inCall ? "Anruf läuft – eigene Verstärkung an" : "normal")") }
+        mic.voiceProcessing = false
+        mic.callBoost = inCall
         CorrectionLearner.shared.finish()   // neues Diktat → letzter Vergleich, dann altes Mitlesen beenden
         // Ziel unter der Maus JETZT merken (nicht beim Loslassen) – Maus bewegen beim Sprechen lenkt nicht um
         mouseSession = MouseTarget.shared.begin(enabled: viaHotkey && Settings.shared.mouseTarget)

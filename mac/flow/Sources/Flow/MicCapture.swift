@@ -75,6 +75,17 @@ final class MicCapture {
         set { stateLock.lock(); _voiceProcessing = newValue; stateLock.unlock() }
     }
 
+    /// Während eines Anrufs: eigene, sanfte Verstärkung statt Apples Sprachverarbeitung.
+    /// 28.09.2026 gemessen: Schaltet Flow die Sprachverarbeitung ein, bekommt eine Anruf-App OHNE sie (Teams) nur noch
+    /// absolute Stille – im Meeting hat einen keiner gehört. Nutzt die Anruf-App selbst die Sprachverarbeitung, kommt
+    /// unser normales Mikro dagegen etwa 30× leiser an. Deshalb: nie selbst einschalten, das leise Signal hier anheben.
+    var callBoost: Bool {
+        get { stateLock.lock(); defer { stateLock.unlock() }; return _callBoost }
+        set { stateLock.lock(); _callBoost = newValue; stateLock.unlock() }
+    }
+    private var _callBoost = false
+    private var agc = CallAGC()
+
     init() { queue.setSpecific(key: onQueueKey, value: true) }
 
     private func onQueue<T>(_ body: () throws -> T) rethrows -> T {
@@ -182,7 +193,8 @@ final class MicCapture {
             return buf
         }
         guard err == nil, let ch = out.floatChannelData, out.frameLength > 0 else { return }
-        let samples = Array(UnsafeBufferPointer(start: ch[0], count: Int(out.frameLength)))
+        var samples = Array(UnsafeBufferPointer(start: ch[0], count: Int(out.frameLength)))
+        if callBoost { agc.apply(&samples) } else { agc.reset() }
         var sum: Float = 0
         for s in samples { sum += s * s }
         let rms = sqrt(sum / Float(samples.count))
@@ -206,4 +218,25 @@ final class SampleBuffer {
         return from < data.count ? Array(data[from...]) : []
     }
     func reset() { lock.lock(); data = []; lock.unlock() }
+}
+
+/// Einfache automatische Verstärkung für Anrufe: Ziel-Spitze 0,3, höchstens 30-fach, schneller Rückgang bei lauten
+/// Stellen (kein Übersteuern), langsamer Anstieg. Leises Grundrauschen (Spitze unter 0,0015) wird nicht hochgezogen.
+struct CallAGC {
+    private var envelope: Float = 0
+    private var gain: Float = 1
+
+    mutating func reset() { envelope = 0; gain = 1 }
+
+    mutating func apply(_ s: inout [Float]) {
+        var pk: Float = 0
+        for v in s { pk = max(pk, abs(v)) }
+        // Hüllkurve: steigt sofort, fällt über ~2 s ab (Puffer ≈ 64 ms bei 16 kHz)
+        envelope = pk > envelope ? pk : envelope * 0.97 + pk * 0.03
+        let want: Float = envelope < 0.0015 ? 1 : min(30, max(1, 0.3 / envelope))
+        // Verstärkung: runter sofort, hoch langsam (≈ 1 s bis zum Ziel)
+        gain = want < gain ? want : gain + (want - gain) * 0.06
+        guard gain > 1.01 else { return }
+        for i in s.indices { s[i] = max(-1, min(1, s[i] * gain)) }
+    }
 }

@@ -437,7 +437,11 @@ enum MeetingProcessor {
         var segments: [Segment] = []
         var embeddings: [String: [Float]] = [:]
         var names = m.speakerNames
-        let online = sysSpeech > 4
+        // Online-Meeting, sobald die anderen hörbar waren – oder eine Anruf-App erkannt wurde (Teams, Zoom, WhatsApp …).
+        // 28.09.2026: die Gegenseite sprach im Test nur ~3 s → galt als Präsenz-Meeting, ihre Spur wurde ignoriert und alles
+        // landete als „Sprecher 1“ statt „Ich“ + andere.
+        let callMeeting = m.app.map { $0 != "Datei" && $0 != "Mikrofon" && !$0.isEmpty } ?? false
+        let online = sysSpeech > 4 || (callMeeting && sysSpeech > 0.5)
 
         do {
             if online {

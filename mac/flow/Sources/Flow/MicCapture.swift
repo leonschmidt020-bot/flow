@@ -225,15 +225,21 @@ final class SampleBuffer {
 struct CallAGC {
     private var envelope: Float = 0
     private var gain: Float = 1
+    /// Grundrauschen (RMS): fällt sofort, steigt langsam – begrenzt die Verstärkung, damit Raumrauschen nicht
+    /// zur „Sprache“ wird (28.09.: Median der Spur lag sonst bei 0,019)
+    private var noise: Float = 0.001
 
-    mutating func reset() { envelope = 0; gain = 1 }
+    mutating func reset() { envelope = 0; gain = 1; noise = 0.001 }
 
     mutating func apply(_ s: inout [Float]) {
-        var pk: Float = 0
-        for v in s { pk = max(pk, abs(v)) }
+        var pk: Float = 0, sum: Float = 0
+        for v in s { pk = max(pk, abs(v)); sum += v * v }
+        let rms = s.isEmpty ? 0 : (sum / Float(s.count)).squareRoot()
+        noise = rms < noise ? max(rms, 0.00005) : noise * 1.002
         // Hüllkurve: steigt sofort, fällt über ~2 s ab (Puffer ≈ 64 ms bei 16 kHz)
         envelope = pk > envelope ? pk : envelope * 0.97 + pk * 0.03
-        let want: Float = envelope < 0.0015 ? 1 : min(30, max(1, 0.3 / envelope))
+        let noiseCap = max(1, 0.004 / noise)   // Rauschen höchstens auf ~0,004 RMS anheben
+        let want: Float = envelope < 0.0015 ? 1 : min(30, noiseCap, max(1, 0.3 / envelope))
         // Verstärkung: runter sofort, hoch langsam (≈ 1 s bis zum Ziel)
         gain = want < gain ? want : gain + (want - gain) * 0.06
         guard gain > 1.01 else { return }

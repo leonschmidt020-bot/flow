@@ -27,6 +27,18 @@ enum MeetingContextCLI {
             guard let r = try? MeetingContextPackage.build(m) else { print("Fehler"); return 1 }
             print(MeetingContextPackage.agentPrompt(m, r)); return 0
         }
+        case "--mc-reprocess": return guardHome {
+            // Meeting neu auswerten (Testordner): --mc-reprocess <meeting-id>  → Abschnitte je Sprecher
+            guard let id = a.first else { print("--mc-reprocess <meeting-id>"); return 2 }
+            var done = false
+            Task { await MeetingProcessor.process(id: id); done = true }
+            while !done { RunLoop.main.run(until: Date().addingTimeInterval(0.1)) }
+            guard let m = MeetingStore.shared.meeting(id) else { print("Meeting fehlt"); return 1 }
+            var bySpeaker: [String: Int] = [:]
+            for seg in m.segments { bySpeaker[m.name(for: seg.speaker), default: 0] += 1 }
+            print("Abschnitte je Sprecher: \(bySpeaker.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: ", "))")
+            return 0
+        }
         case "--mc-render": return guardHome { render(a) }
         case "--mc-ask": return guardHome {
             guard a.count >= 2, let m = MeetingStore.shared.meeting(a[0]) else { print("--mc-ask <id> <frage>"); return 2 }

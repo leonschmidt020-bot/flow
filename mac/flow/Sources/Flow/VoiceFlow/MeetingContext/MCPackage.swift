@@ -21,7 +21,7 @@ enum MeetingContextPackage {
         var segments = 0, words = 0, transcriptLines = 0
         var hasTimeline = false
         /// Originalaufnahme im Meeting-Ordner (Import oder „Audio behalten“)
-        var audio: URL?
+        var audio: [URL] = []
     }
 
     /// Eintrag der Zeitleiste
@@ -83,7 +83,7 @@ enum MeetingContextPackage {
         r.words = m.segments.reduce(0) { $0 + $1.text.split(whereSeparator: \.isWhitespace).count }
         r.transcriptLines = tr.components(separatedBy: "\n").count
         r.hasTimeline = !sorted.isEmpty
-        r.audio = audioFile(m)
+        r.audio = audioFiles(m)
         try write(tr, "transkript.md")
         if r.hasTimeline { try write(timeline(m, entries: sorted), "bilder.md") }
         let md = markdown(m, mc: mc, r)
@@ -93,10 +93,18 @@ enum MeetingContextPackage {
     }
 
     /// Originalaufnahme im Meeting-Ordner (importierte Datei oder behaltener Ton)
-    private static func audioFile(_ m: Meeting) -> URL? {
+    /// Alle Originalaufnahmen im Meeting-Ordner (Import: eine Datei; Aufnahme: ich.wav = dein Mikro, andere.wav = Ton der anderen)
+    private static func audioFiles(_ m: Meeting) -> [URL] {
         let exts: Set<String> = ["qta", "m4a", "mp3", "wav", "aac", "caf", "aiff", "flac", "ogg", "opus", "mp4", "mov"]
         let files = (try? FileManager.default.contentsOfDirectory(at: m.folder, includingPropertiesForKeys: nil)) ?? []
-        return files.filter { exts.contains($0.pathExtension.lowercased()) }.sorted { $0.lastPathComponent < $1.lastPathComponent }.first
+        return files.filter { exts.contains($0.pathExtension.lowercased()) }.sorted { $0.lastPathComponent > $1.lastPathComponent }
+    }
+    static func audioLabel(_ u: URL) -> String {
+        switch u.lastPathComponent {
+        case "ich.wav": return "dein Mikrofon"
+        case "andere.wav": return "Ton der anderen (Systemton)"
+        default: return "Originalaufnahme"
+        }
     }
 
     /// Zeit relativ zum Meeting-Beginn, vorher mit „−“
@@ -132,7 +140,7 @@ enum MeetingContextPackage {
         s += "## Dateien in diesem Paket\n\n"
         s += "- `transkript.md` – **das vollständige Transkript**: \(r.segments) Abschnitte, ca. \(r.words) Wörter, \(r.transcriptLines) Zeilen\n"
         if r.hasTimeline { s += "- `bilder.md` – Zeitleiste der Bilder mit erkanntem Text und dem Gesprochenen dazu; Bilder in `bilder/` (B… = Meeting-Bildschirm, S… = eigene Screenshots)\n" }
-        if let a = r.audio { s += "- Originalaufnahme: `\(a.path)`\n" }
+        for a in r.audio { s += "- \(audioLabel(a)): `\(a.path)`\n" }
         s += "\n"
 
         if let sum = m.summary, !sum.isEmpty { s += "## Zusammenfassung\n\n\(sum)\n\n" }
@@ -205,7 +213,7 @@ enum MeetingContextPackage {
         if r.hasTimeline {
             p += "- bilder.md + bilder/ – \(r.keyframes) Schlüsselbilder vom Meeting-Bildschirm und \(r.ownShots) eigene Screenshots, mit erkanntem Text und dem Gesprochenen dazu\n"
         }
-        if let a = r.audio { p += "- Originalaufnahme: \(a.path)\n" }
+        for a in r.audio { p += "- \(audioLabel(a).prefix(1).uppercased() + audioLabel(a).dropFirst()): \(a.path)\n" }
         p += "\nLies zuerst transkript.md KOMPLETT – bei einer langen Datei in mehreren Teilen, bis „— Ende des Transkripts —“ – "
         p += r.hasTimeline ? "dann meeting.md und bilder.md mit den Bildern. " : "dann meeting.md. "
         p += "Bestätige kurz, dass du alles gelesen hast, und warte dann auf meine Aufgabe."

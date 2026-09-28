@@ -53,7 +53,7 @@ export interface MeetingDeps {
   /** better display name from window titles („Teams · Wochenplanung“, „Google Meet“) – naming hint only */
   callName?: (call: ActiveCall) => string | null;
   /** detection timings (tests shorten them) */
-  timing?: { pollMs?: number; endGraceMs?: number; overTimeoutMs?: number; promptTimeoutMs?: number };
+  timing?: { pollMs?: number; endGraceMs?: number; overTimeoutMs?: number; overDeadlineMs?: number; promptTimeoutMs?: number };
   claudeBin?: () => string | null;
   /** injectable for tests */
   diarizer?: () => Promise<Diarizer>;
@@ -462,16 +462,29 @@ export class MeetingController extends EventEmitter {
     // apps that released the mic may ask again next time
     this.promptedFor = new Set([...this.promptedFor].filter((id) => apps.some((a) => a.id === id)));
     const L = this.L();
-    const T = { endGraceMs: 4000, overTimeoutMs: 90_000, promptTimeoutMs: 25_000, ...this.d.timing };
+    const T = { endGraceMs: 4000, overTimeoutMs: 55_000, overDeadlineMs: 60_000, promptTimeoutMs: 25_000, ...this.d.timing };
     if (this.rec) {
       const rec = this.rec;
       // which call belongs to this meeting? (also for a recording started by hand)
       if (!rec.callId && apps[0]) { rec.callId = apps[0].id; rec.callName = this.displayName(apps[0]); }
       if (!rec.callId) return;
-      if (apps.some((a) => a.id === rec.callId)) { rec.goneSince = null; if (this.cardKind === 'over') this.clearCard(); return; }
+      if (apps.some((a) => a.id === rec.callId)) { rec.goneSince = null; this.clearOverDeadline(); if (this.cardKind === 'over') this.clearCard(); return; }
       if (rec.goneSince !== null) return;
       rec.goneSince = this.now();
       this.d.log(`meeting: ${rec.callName ?? rec.callId} released the microphone`);
+      // Wie am Mac (28.09.2026): Ende unabhängig von der Karte – wird sie verdrängt oder weggeklickt, läuft die Aufnahme
+      // nicht endlos weiter. Nur „Weiter aufnehmen“ hält sie; spätestens 60 s nach dem Freigeben ist Schluss.
+      const gone = rec.goneSince;
+      this.clearOverDeadline();
+      this.overDeadline = setTimeout(() => {
+        this.overDeadline = null;
+        if (this.rec !== rec || rec.goneSince !== gone) return;
+        const n = (rec.callName ?? '').replace(/ \(.*\)$/, '').trim() || mt(L, 'meetingWord');
+        this.d.log('meeting: no answer 60 s after the call ended → stopping');
+        this.d.pill.toast(mt(L, 'toastMeetingOver', { app: n }), 'info', 3000);
+        if (this.cardKind === 'over') this.clearCard();
+        void this.stop();
+      }, T.overDeadlineMs);
       // short dropouts happen → wait a moment, then: auto-started → stop; otherwise ask („Meeting vorbei?“, stops by itself after 90 s)
       setTimeout(() => {
         if (this.rec !== rec || rec.goneSince === null) return;
@@ -494,6 +507,9 @@ export class MeetingController extends EventEmitter {
     this.changed();
   }
 
+  private overDeadline: ReturnType<typeof setTimeout> | null = null;
+  private clearOverDeadline() { if (this.overDeadline) clearTimeout(this.overDeadline); this.overDeadline = null; }
+
   private cardKind: PillCard['kind'] | null = null;
   private showCard(c: PillCard, timeoutMs: number, onTimeout: () => void) {
     this.clearCard();
@@ -512,7 +528,7 @@ export class MeetingController extends EventEmitter {
     const kind = this.cardKind;
     this.clearCard();
     if (kind === 'detected') { if (yes) this.acceptPrompt(); else this.dismissPrompt(); }
-    else if (kind === 'over' && this.rec) { if (yes) void this.stop(); else { this.rec.goneSince = null; this.rec.callId = null; } }
+    else if (kind === 'over' && this.rec) { this.clearOverDeadline(); if (yes) void this.stop(); else { this.rec.goneSince = null; this.rec.callId = null; } }
   }
   acceptPrompt() { const app = this.promptApp; this.promptApp = null; this.clearCard(); if (app) void this.start(app.name); }
   dismissPrompt() { this.promptApp = null; if (this.cardKind === 'detected') this.clearCard(); this.changed(); }

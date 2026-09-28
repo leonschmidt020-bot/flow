@@ -103,7 +103,7 @@ describe('CallDetector', () => {
 });
 
 describe('controller reacts to detection', () => {
-  function setup(detection: 'ask' | 'auto' | 'off') {
+  function setup(detection: 'ask' | 'auto' | 'off', overDeadlineMs = 60_000) {
     const root = mkdtempSync(path.join(os.tmpdir(), 'flow-detect-'));
     let snapshot: MicUser[] = [];
     const cards: (PillCard | null)[] = [];
@@ -113,7 +113,7 @@ describe('controller reacts to detection', () => {
       asr: () => null, waitAsr: () => new Promise(() => {}), capture: () => new MockCapture({ mic: new Float32Array(1600), system: new Float32Array(1600) }),
       copyText: () => {}, log: () => {},
       pill: { meeting: () => {}, task: () => {}, card: (x) => cards.push(x), toast: (t) => toasts.push(t), level: () => {} },
-      callProbe: async () => snapshot, ownExe: FLOW, timing: { pollMs: 60_000, endGraceMs: 5, overTimeoutMs: 60_000, promptTimeoutMs: 60_000 },
+      callProbe: async () => snapshot, ownExe: FLOW, timing: { pollMs: 60_000, endGraceMs: 5, overTimeoutMs: 60_000, overDeadlineMs, promptTimeoutMs: 60_000 },
       diarizer: async () => ({ diarize: async () => [] }), transcriber: () => async () => [],
     });
     c.setSettings({ detection });
@@ -138,7 +138,7 @@ describe('controller reacts to detection', () => {
     expect(c.store.meetings[0]!.title.startsWith('Microsoft Teams-Meeting · ')).toBe(true);
     await set(teamsEnded);
     await new Promise((r) => setTimeout(r, 30));
-    expect(cards.at(-1)).toMatchObject({ kind: 'over', sub: 'Meeting vorbei?', yes: 'Beenden' });
+    expect(cards.at(-1)).toMatchObject({ kind: 'over', sub: 'Meeting abgeschlossen?', yes: 'Ja, beenden', no: 'Weiter aufnehmen' });
     c.cardAnswer(true);
     await new Promise((r) => setTimeout(r, 30));
     expect(c.isRecording).toBe(false);
@@ -164,6 +164,32 @@ describe('controller reacts to detection', () => {
     await new Promise((r) => setTimeout(r, 60));
     expect(c.isRecording).toBe(false);
     expect(toasts).toContain('Microsoft Teams: Meeting vorbei – wird ausgewertet');
+    c.dispose();
+  });
+  it('„Meeting abgeschlossen?“ verdrängt/weggeklickt → endet trotzdem (Frist), nur „Weiter aufnehmen“ hält', async () => {
+    const { c, cards, set } = setup('ask', 80);
+    await set(teams);
+    c.cardAnswer(true);
+    await new Promise((r) => setTimeout(r, 30));
+    expect(c.isRecording).toBe(true);
+    await set(teamsEnded);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(cards.at(-1)).toMatchObject({ kind: 'over' });
+    (c as unknown as { clearCard: () => void }).clearCard();   // z. B. von einer anderen Karte verdrängt
+    await new Promise((r) => setTimeout(r, 150));
+    expect(c.isRecording).toBe(false);
+    c.dispose();
+  });
+  it('„Weiter aufnehmen“ hält die Aufnahme über die Frist hinaus', async () => {
+    const { c, set } = setup('ask', 80);
+    await set(teams);
+    c.cardAnswer(true);
+    await new Promise((r) => setTimeout(r, 30));
+    await set(teamsEnded);
+    await new Promise((r) => setTimeout(r, 20));
+    c.cardAnswer(false);
+    await new Promise((r) => setTimeout(r, 150));
+    expect(c.isRecording).toBe(true);
     c.dispose();
   });
   it('off: nothing happens', async () => {

@@ -610,6 +610,7 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
                 if e.modifierFlags.contains(.command), e.charactersIgnoringModifiers?.lowercased() == "a" {
                     if let tv = self.panel.firstResponder as? NSTextView { tv.selectAll(nil); return nil }
                 }
+                if e.keyCode == 53, ActionBar.collapseActive() { return nil }   // Esc: offene Aktions-Leiste zuerst zuklappen
                 if e.keyCode == 53 { self.hide(); return nil }  // Esc überall, auch mit Fokus in der Vorschau
                 // Leertaste auf einem Bild = Quick Look (wie im Finder) – nicht, während im Suchfeld getippt wird
                 if e.keyCode == 49, e.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty,
@@ -770,92 +771,61 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         sub.usesSingleLineMode = true; sub.maximumNumberOfLines = 1; sub.lineBreakMode = .byTruncatingTail
         sub.attributedStringValue = sublineAttr(item, badges: badges, masked: masked)
         v.addSubview(sub)
-        // Kuerzel Cmd+1…9 (dezent, links neben dem Pin; beim Hovern deckt die Pille es ab)
+        // Kuerzel Cmd+1…9 (dezent, links neben dem Pin; beim Hovern ausgeblendet)
+        var quickHint: NSTextField?
         if let q = quick {
-            let hint = NSTextField(labelWithString: "⌘\(q)")
+            let hint = NSTextField(labelWithString: "⌘\(q)"); quickHint = hint
             hint.font = .systemFont(ofSize: 11, weight: .medium); hint.textColor = NSColor.white.withAlphaComponent(0.30)
             hint.alignment = .right
             hint.frame = NSRect(x: (leftW-24) - 12 - 6 - 26 - 34, y: (rowH-16)/2, width: 30, height: 16)
             hint.autoresizingMask = [.minXMargin]   // wandert mit der Pille, wenn die Zeile schmaler wird
             v.addSubview(hint)
         }
-        // ===== Aktionen rechts: EINE Pille — Bereich-Icons + Papierkorb (beim Hovern) + Pin =====
-        let aSize: CGFloat = 26, aGap: CGFloat = 6, aPad: CGFloat = 6
-        let cols = Array(Store.shared.collections.prefix(6))
-        let n = cols.count
-        let slots = n + 3  // Bereiche + Teilen + Papierkorb + Pin
-        let pillW = CGFloat(slots) * aSize + CGFloat(slots - 1) * aGap + aPad * 2
-        let pillH: CGFloat = 34
-        let pill = NSView(frame: NSRect(x: (leftW-24) - pillW - 12, y: (rowH-pillH)/2, width: pillW, height: pillH))
-        pill.autoresizingMask = [.minXMargin]
-        pill.wantsLayer = true; pill.layer?.cornerRadius = pillH/2; pill.layer?.backgroundColor = NSColor.clear.cgColor
-        var hoverButtons: [NSButton] = []
-        var ax = aPad
-        // Bereich-Icons (nur beim Hovern sichtbar)
-        for c in cols {
-            let b = NSButton(frame: NSRect(x: ax, y: (pillH-aSize)/2, width: aSize, height: aSize))
-            b.isBordered = false; b.title = ""; b.imagePosition = .imageOnly
-            b.identifier = NSUserInterfaceItemIdentifier(item.id + "|" + c.id)
-            b.image = colIcon(c.symbol, sf: 12, img: aSize - 7)
-            let inThis = (item.collection == c.id)
-            b.contentTintColor = inThis ? NSColor.controlAccentColor : NSColor.white.withAlphaComponent(0.9)
-            b.wantsLayer = true; b.layer?.cornerRadius = aSize/2
-            if inThis { b.layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.28).cgColor }
-            b.toolTip = inThis ? "Aus „\(c.name)\" entfernen" : "In „\(c.name)\" legen"
-            b.target = self; b.action = #selector(quickAssign(_:)); b.isHidden = true
-            pill.addSubview(b); hoverButtons.append(b); ax += aSize + aGap
+        // ===== Aktionen rechts: EIN Griff (•••) — Bereiche · Teilen · Papierkorb · Pin erst nach langem Druecken (actionbar.swift) =====
+        let iid = item.id
+        var acts: [ActionBarItem] = []
+        for c in Store.shared.collections.prefix(6) {
+            let inThis = (item.collection == c.id), cid = c.id
+            acts.append(ActionBarItem(image: colIcon(c.symbol, sf: 12, img: 19),
+                tint: inThis ? NSColor.controlAccentColor : NSColor.white.withAlphaComponent(0.9),
+                fill: inThis ? NSColor.controlAccentColor.withAlphaComponent(0.28) : nil,
+                tip: inThis ? "Aus „\(c.name)\" entfernen" : "In „\(c.name)\" legen",
+                action: { [weak self] in self?.quickAssign(itemId: iid, collectionId: cid) }))
         }
-        // Mit dem Partner teilen (nur beim Hovern; geteilt = Akzentfarbe, Klick nimmt die Freigabe zurueck)
-        let shBtn = NSButton(frame: NSRect(x: ax, y: (pillH-aSize)/2, width: aSize, height: aSize))
-        shBtn.isBordered = false; shBtn.title = ""; shBtn.imagePosition = .imageOnly
-        shBtn.identifier = NSUserInterfaceItemIdentifier(item.id)
-        shBtn.image = NSImage(systemSymbolName: "person.2.fill", accessibilityDescription: "Teilen")?.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 11, weight: .semibold))
-        shBtn.contentTintColor = item.shared ? NSColor.systemTeal : NSColor.white.withAlphaComponent(0.9)   // Tuerkis = wie das Etikett „GETEILT"
-        shBtn.wantsLayer = true; shBtn.layer?.cornerRadius = aSize/2
-        if item.shared { shBtn.layer?.backgroundColor = NSColor.systemTeal.withAlphaComponent(0.26).cgColor }
-        shBtn.toolTip = item.shared ? "Nicht mehr mit \(SharedVault.shared.partner) teilen (Cmd+J)" : "Mit \(SharedVault.shared.partner) teilen (Cmd+J)"
-        shBtn.target = self; shBtn.action = #selector(shareRowClicked(_:)); shBtn.isHidden = true
-        pill.addSubview(shBtn); hoverButtons.append(shBtn); ax += aSize + aGap
-        // Papierkorb (nur beim Hovern, rot)
-        let trashBtn = NSButton(frame: NSRect(x: ax, y: (pillH-aSize)/2, width: aSize, height: aSize))
-        trashBtn.isBordered = false; trashBtn.title = ""; trashBtn.imagePosition = .imageOnly
-        trashBtn.identifier = NSUserInterfaceItemIdentifier(item.id)
-        trashBtn.image = NSImage(systemSymbolName: "trash", accessibilityDescription: "Löschen")?.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 12, weight: .semibold))
-        trashBtn.contentTintColor = NSColor.systemRed.withAlphaComponent(0.9)
-        trashBtn.toolTip = "Löschen (Cmd+⌫)"
-        trashBtn.wantsLayer = true; trashBtn.layer?.cornerRadius = aSize/2
-        trashBtn.target = self; trashBtn.action = #selector(deleteClicked(_:)); trashBtn.isHidden = true
-        pill.addSubview(trashBtn); hoverButtons.append(trashBtn); ax += aSize + aGap
-        // Pin (IMMER sichtbar, letzter Slot ganz rechts)
-        let pinBtn = NSButton(frame: NSRect(x: ax, y: (pillH-aSize)/2, width: aSize, height: aSize))
-        pinBtn.isBordered = false; pinBtn.title = ""; pinBtn.imagePosition = .imageOnly
-        pinBtn.wantsLayer = true; pinBtn.layer?.cornerRadius = aSize/2
-        pinBtn.identifier = NSUserInterfaceItemIdentifier(item.id)
-        pinBtn.image = NSImage(systemSymbolName: item.pinned ? "pin.fill" : "pin", accessibilityDescription: "Anheften")?.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 13, weight: .semibold))
-        pinBtn.contentTintColor = item.pinned ? NSColor.systemYellow : NSColor.white.withAlphaComponent(0.5)
-        pinBtn.toolTip = item.pinned ? "Lösen (Cmd+P)" : "Anheften (Cmd+P)"
-        pinBtn.target = self; pinBtn.action = #selector(pinClicked(_:))
-        pill.addSubview(pinBtn)
-        v.addSubview(pill)
-        func expand() {
-            pill.layer?.backgroundColor = NSColor(white: 0.16, alpha: 0.98).cgColor
-            pill.layer?.borderWidth = 1; pill.layer?.borderColor = NSColor.white.withAlphaComponent(0.14).cgColor
-            hoverButtons.forEach { $0.isHidden = false }
-            if !item.pinned { pinBtn.contentTintColor = .white }
-        }
-        func collapse() {
-            pill.layer?.backgroundColor = NSColor.clear.cgColor; pill.layer?.borderWidth = 0
-            hoverButtons.forEach { $0.isHidden = true }
-            if !item.pinned { pinBtn.contentTintColor = NSColor.white.withAlphaComponent(0.5) }
-        }
+        // Mit dem Partner teilen (geteilt = Tuerkis wie das Etikett „GETEILT"; Klick nimmt die Freigabe zurueck)
+        acts.append(ActionBarItem(image: NSImage(systemSymbolName: "person.2.fill", accessibilityDescription: "Teilen")?.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 11, weight: .semibold)),
+            tint: item.shared ? NSColor.systemTeal : NSColor.white.withAlphaComponent(0.9),
+            fill: item.shared ? NSColor.systemTeal.withAlphaComponent(0.26) : nil,
+            tip: item.shared ? "Nicht mehr mit \(SharedVault.shared.partner) teilen (Cmd+J)" : "Mit \(SharedVault.shared.partner) teilen (Cmd+J)",
+            action: { [weak self] in self?.toggleShare(iid) }))
+        acts.append(ActionBarItem(image: NSImage(systemSymbolName: "trash", accessibilityDescription: "Löschen")?.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 12, weight: .semibold)),
+            tint: NSColor.systemRed.withAlphaComponent(0.9), tip: "Löschen (Cmd+⌫)",
+            action: { [weak self] in self?.deleteItem(iid) }))
+        // Pin: auch ohne Hover sichtbar (Status), letzter Platz ganz rechts
+        acts.append(ActionBarItem(image: NSImage(systemSymbolName: item.pinned ? "pin.fill" : "pin", accessibilityDescription: "Anheften")?.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 13, weight: .semibold)),
+            tint: item.pinned ? NSColor.systemYellow : .white,
+            restTint: item.pinned ? NSColor.systemYellow : NSColor.white.withAlphaComponent(0.5),
+            tip: item.pinned ? "Lösen (Cmd+P)" : "Anheften (Cmd+P)", showAtRest: true, badge: item.pinned,
+            action: { [weak self] in self?.togglePin(iid) }))
+        let bar = makeActionBar(acts, rowH: rowH, row: row)
+        v.addSubview(bar)
         v.onHover = { [weak self] in
             guard let self = self, self.editingId == nil else { return }   // beim Bearbeiten Auswahl festhalten
-            self.expandedRowCollapse?()        // vorher offene Pille IMMER zuerst schließen -> nie zwei offen
+            self.expandedRowCollapse?()        // vorher offene Leiste IMMER zuerst schließen -> nie zwei offen
             self.selectRow(row)
-            expand(); self.expandedRowCollapse = collapse
+            // ⌘n-Kuerzel beim Hovern ausblenden (frueher deckte es die Pille ab; jetzt sitzt dort der Pin-Status)
+            bar.setRowHovered(true); quickHint?.isHidden = true
+            self.expandedRowCollapse = { [weak bar, weak quickHint] in bar?.setRowHovered(false); quickHint?.isHidden = false }
         }
-        v.onExit = { collapse() }
+        v.onExit = { [weak bar, weak quickHint] in bar?.setRowHovered(false); quickHint?.isHidden = false }
         return v
+    }
+    /// Aktions-Leiste rechtsbuendig in der Zeile (gleiche Stelle wie die alte Pille)
+    func makeActionBar(_ acts: [ActionBarItem], rowH: CGFloat, row: Int) -> ActionBar {
+        let w = ActionBar.frameWidth(acts.count)
+        let bar = ActionBar(frame: NSRect(x: (leftW-24) - 12 - w, y: (rowH - ActionBar.pillH)/2, width: w, height: ActionBar.pillH), items: acts)
+        bar.autoresizingMask = [.minXMargin]
+        return bar
     }
     // ===== Mit dem Partner teilen (Pille, Vorschau, Cmd+J, Rechtsklick) =====
     /// Umschalter: nicht geteilt -> teilen, geteilt -> Freigabe zuruecknehmen. Ohne Kopplung bleibt es „wartet auf Sync".
@@ -872,7 +842,6 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         reload()
         if let idx = display.firstIndex(where: { if case .item(let x) = $0 { return x.id == id }; return false }) { selectRow(idx) }
     }
-    @objc func shareRowClicked(_ sender: NSButton) { if let id = sender.identifier?.rawValue { toggleShare(id) } }
     @objc func sharePreviewClicked() { if let id = previewItemId, Store.shared.item(id) != nil { toggleShare(id) } }
     func toggleShareSelected() {
         let r = table.selectedRow
@@ -892,8 +861,7 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         shareBtn.setFrameSize(NSSize(width: title.size(withAttributes: [.font: f]).width + 38, height: 28))
         shareBtn.isHidden = false
     }
-    @objc func deleteClicked(_ sender: NSButton) {
-        guard let iid = sender.identifier?.rawValue else { return }
+    func deleteItem(_ iid: String) {
         Store.shared.delete(id: iid); reload(); buildChips()
     }
     func deleteSelected() {
@@ -903,17 +871,14 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         guard case .item(let it) = display[r] else { return }
         Store.shared.delete(id: it.id); reload(); buildChips()
     }
-    @objc func quickAssign(_ sender: NSButton) {
-        guard let raw = sender.identifier?.rawValue else { return }
-        let parts = raw.components(separatedBy: "|"); guard parts.count == 2 else { return }
-        let iid = parts[0], cid = parts[1]
+    func quickAssign(itemId iid: String, collectionId cid: String) {
         let cur = Store.shared.items.first(where: { $0.id == iid })?.collection
         if cur == cid { Store.shared.setCollection(itemId: iid, collectionId: nil) }   // schon drin -> raus
         else { Store.shared.setCollection(itemId: iid, collectionId: cid); Toast.shared.show("In Bereich gelegt") }
         reload(); buildChips()
     }
-    @objc func pinClicked(_ sender: NSButton) {
-        guard let id = sender.identifier?.rawValue, let it = Store.shared.items.first(where: { $0.id == id }) else { return }
+    func togglePin(_ id: String) {
+        guard let it = Store.shared.items.first(where: { $0.id == id }) else { return }
         Store.shared.togglePin(it); reload()
         if let idx = display.firstIndex(where: { if case .item(let x) = $0 { return x.id == id }; return false }) { selectRow(idx) }
     }
@@ -1376,12 +1341,18 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
 
     @objc func rowClicked() {
         let r = table.clickedRow
-        guard editingId == nil, r >= 0 && r < display.count, rowId(display[r]) != nil else { return }
-        // Klick auf einen Button (Pin / Bereich-Icon) NICHT als Kopieren werten
-        if let cell = table.view(atColumn: 0, row: r, makeIfNecessary: false), let sup = cell.superview {
+        // Klick auf die Aktions-Leiste kommt hier nie an (die Leiste behandelt ihn selbst); zur Sicherheit:
+        // landet ein Klick doch auf einem Knopf oder der scharfen Leiste, ist er KEIN Kopieren
+        if r >= 0, let cell = table.view(atColumn: 0, row: r, makeIfNecessary: false), let sup = cell.superview {
             let p = sup.convert(panel.mouseLocationOutsideOfEventStream, from: nil)
-            if cell.hitTest(p) is NSButton { return }
+            let hit = cell.hitTest(p)
+            if hit is NSButton || ((hit as? ActionBar)?.machine.isArmed ?? false) { return }
         }
+        activateRow(r)
+    }
+    /// Zeile „waehlen" = kopieren + einfuegen
+    func activateRow(_ r: Int) {
+        guard editingId == nil, r >= 0 && r < display.count, rowId(display[r]) != nil else { return }
         switch display[r] {
         case .item(let it): choose(it)
         case .shared(let sh): chooseShared(sh)

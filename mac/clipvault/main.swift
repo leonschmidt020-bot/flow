@@ -216,6 +216,19 @@ if cliArgs.count >= 3 && cliArgs[1] == "panel-render" {
                 (pc.table.view(atColumn: 0, row: idx, makeIfNecessary: false) as? HoverRowView)?.onHover?()
             }
         }
+    case "leiste-ruhe", "leiste-kompakt", "leiste-kompakt-pin", "leiste-hinweis", "leiste-halten", "leiste-aufgehen", "leiste-offen", "leiste-ziehen", "leiste-zu":
+        // Aktions-Leiste einer Zeile in einem Zustand (actionbar.swift) — es wird nichts ausgeloest
+        let wantPin = scene == "leiste-kompakt-pin"
+        if let li = Store.shared.items.first(where: { $0.kind == .text && $0.collection == nil && soleURL($0.text) == nil && $0.pinned == wantPin }) {
+            pc.reload()
+            if let idx = pc.display.firstIndex(where: { pc.rowId($0) == li.id }) {
+                pc.selectRow(idx, scroll: true); pc.table.layoutSubtreeIfNeeded()
+                if let rv = pc.table.view(atColumn: 0, row: idx, makeIfNecessary: false) as? HoverRowView {
+                    if scene != "leiste-ruhe" { rv.onHover?() }
+                    (rv.subviews.first { $0 is ActionBar } as? ActionBar)?.debugScene(wantPin ? "kompakt" : String(scene.dropFirst("leiste-".count)))
+                }
+            }
+        }
     default: pick { $0.kind == .text && soleURL($0.text) != nil }
     }
     let v = pc.effect
@@ -250,6 +263,8 @@ if cliArgs.count >= 2 && cliArgs[1] == "test-phonedrop" {
     DispatchQueue.main.asyncAfter(deadline: .now() + 4.5) { exit(0) }
     appT.run()
 }
+// Selbsttest des Aktions-Leisten-Automaten (reine Logik, fasst nichts an)
+if cliArgs.count >= 2 && cliArgs[1] == "actionbar-test" { runActionBarTest() }
 // Selbsttest: derselbe Screenshot ueber Datei + Zwischenablage -> ein Eintrag (nur mit CLIPVAULT_HOME)
 if cliArgs.count >= 2 && cliArgs[1] == "doppelt-test" { runDoppeltTest(cliArgs) }
 // Geteilter Tresor: Kopplung + Sync (sync.swift)
@@ -273,6 +288,9 @@ if cliArgs.count >= 2 && !cliArgs[1].hasPrefix("-") {
                           szene: link · text · bild · farbe · passwort · geteilt · geteilt-neu · geteilt-gesehen
                                  · bilder · bearbeiten · teilen · teilen-an
                                  · geteilt-dateien · geteilt-laedt · geteilt-lokal
+                                 · leiste-ruhe · leiste-kompakt · leiste-kompakt-pin · leiste-hinweis
+                                 · leiste-halten · leiste-aufgehen · leiste-offen · leiste-ziehen
+                                 · leiste-zu   (Aktions-Leiste einer Zeile)
       send <aktion> [feld=wert …]
                           Befehl an die laufende App (siehe PROTOCOL.md), z. B. send ping
       listen [sekunden]   Aenderungs-/Antwort-Meldungen mitlesen
@@ -284,6 +302,7 @@ if cliArgs.count >= 2 && !cliArgs[1].hasPrefix("-") {
       sync setup <url> | status
                           Sync-Server (Cloudflare Worker) eintragen / Zustand zeigen
       sync-agent          nur Sync ohne Oberflaeche (Test-/Zweitgeraet, mit CLIPVAULT_HOME)
+      actionbar-test      Selbsttest der Aktions-Leiste (Griff, Halten, Ziehen-Loslassen, Einfahren)
       doppelt-test [--ohne-abgleich]
                           Selbsttest Screenshot-Doppel (nur mit CLIPVAULT_HOME=<Testordner>)
       linkprev-test <url> <png>

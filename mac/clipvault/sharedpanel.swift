@@ -209,9 +209,8 @@ extension PanelController {
         let textX: CGFloat = 14 + iconSize + 14
         let quick = quickIndex[sh.id]
         let actions = sharedRowActions(sh)
-        let aSize: CGFloat = 26, aGap: CGFloat = 6, aPad: CGFloat = 6, pillH: CGFloat = 34
-        let slots = actions.count + 2
-        let pillW = CGFloat(slots) * aSize + CGFloat(slots - 1) * aGap + aPad * 2
+        let aSize: CGFloat = 26, aPad: CGFloat = 6
+        let pillW = ActionBar.armedWidth(actions.count + 3)   // Breite der offenen Leiste (Icons + Griff)
         let pillX = (leftW-24) - pillW - 12
         // Kuerzel ⌘n: ohne Knoepfe an der gewohnten Stelle (wie im Verlauf), sonst links neben der Pille
         let hintX = actions.isEmpty ? (leftW-24) - 12 - 6 - 26 - 34 : pillX - 36
@@ -250,40 +249,31 @@ extension PanelController {
             hint.frame = NSRect(x: hintX, y: (rowH-16)/2 + 9, width: 30, height: 16)
             v.addSubview(hint)
         }
-        // Pille: [Laden/Abbrechen/Erneut] (immer) · Entfernen (Hover) · Pin
-        let pill = NSView(frame: NSRect(x: pillX, y: (rowH-pillH)/2, width: pillW, height: pillH))
-        pill.wantsLayer = true; pill.layer?.cornerRadius = pillH/2
-        var ax = aPad
-        for (sym, tip, sel, tint) in actions {
-            let b = FlatButton(frame: NSRect(x: ax, y: (pillH-aSize)/2, width: aSize, height: aSize)); b.payload = sh.id
-            b.isBordered = false; b.title = ""; b.imagePosition = .imageOnly
-            b.image = NSImage(systemSymbolName: sym, accessibilityDescription: tip)?.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 13, weight: .semibold))
-            b.contentTintColor = tint; b.toolTip = tip
-            b.wantsLayer = true; b.layer?.cornerRadius = aSize/2; b.layer?.backgroundColor = tint.withAlphaComponent(0.18).cgColor
-            b.target = self; b.action = sel
-            pill.addSubview(b); ax += aSize + aGap
+        // Aktions-Leiste (actionbar.swift): [Laden/Abbrechen/Erneut] (immer sichtbar) · Entfernen · Pin (immer sichtbar)
+        // Beim Hovern nur der Griff (•••); erst langes Druecken laesst die Icons herausgleiten.
+        let sid = sh.id
+        func fire(_ sel: Selector) { let fb = FlatButton(); fb.payload = sid; _ = self.perform(sel, with: fb) }
+        var acts: [ActionBarItem] = actions.map { (sym, tip, sel, tint) in
+            ActionBarItem(image: NSImage(systemSymbolName: sym, accessibilityDescription: tip)?.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 13, weight: .semibold)),
+                          tint: tint, fill: tint.withAlphaComponent(0.18), tip: tip, showAtRest: true, badge: true,
+                          action: { [weak self] in guard self != nil else { return }; fire(sel) })
         }
-        let trash = FlatButton(frame: NSRect(x: ax, y: (pillH-aSize)/2, width: aSize, height: aSize)); trash.payload = sh.id
-        trash.isBordered = false; trash.title = ""; trash.imagePosition = .imageOnly
-        trash.image = NSImage(systemSymbolName: "person.2.slash", accessibilityDescription: "Nicht mehr teilen")?.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 11, weight: .semibold))
-        trash.contentTintColor = NSColor.systemRed.withAlphaComponent(0.9); trash.toolTip = "Aus „Geteilt\" entfernen (Cmd+⌫)"
-        trash.target = self; trash.action = #selector(unshareClicked(_:)); trash.isHidden = true
-        pill.addSubview(trash); ax += aSize + aGap
-        let pin = FlatButton(frame: NSRect(x: ax, y: (pillH-aSize)/2, width: aSize, height: aSize)); pin.payload = sh.id
-        pin.isBordered = false; pin.title = ""; pin.imagePosition = .imageOnly
-        pin.image = NSImage(systemSymbolName: sh.pinned ? "pin.fill" : "pin", accessibilityDescription: "Anheften")?.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 13, weight: .semibold))
-        pin.contentTintColor = sh.pinned ? .systemYellow : NSColor.white.withAlphaComponent(0.5)
-        pin.toolTip = sh.pinned ? "Lösen (Cmd+P)" : (sh.isBig ? "Anheften (Cmd+P) — große Dateien laufen dann nicht ab" : "Anheften (Cmd+P)")
-        pin.target = self; pin.action = #selector(sharedPinClicked(_:))
-        pill.addSubview(pin)
-        v.addSubview(pill)
-        func expand() { pill.layer?.backgroundColor = NSColor(white: 0.16, alpha: 0.98).cgColor; pill.layer?.borderWidth = 1; pill.layer?.borderColor = NSColor.white.withAlphaComponent(0.14).cgColor; trash.isHidden = false }
-        func collapse() { pill.layer?.backgroundColor = NSColor.clear.cgColor; pill.layer?.borderWidth = 0; trash.isHidden = true }
+        acts.append(ActionBarItem(image: NSImage(systemSymbolName: "person.2.slash", accessibilityDescription: "Nicht mehr teilen")?.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 11, weight: .semibold)),
+            tint: NSColor.systemRed.withAlphaComponent(0.9), tip: "Aus „Geteilt\" entfernen (Cmd+⌫)",
+            action: { [weak self] in guard self != nil else { return }; fire(#selector(PanelController.unshareClicked(_:))) }))
+        acts.append(ActionBarItem(image: NSImage(systemSymbolName: sh.pinned ? "pin.fill" : "pin", accessibilityDescription: "Anheften")?.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 13, weight: .semibold)),
+            tint: sh.pinned ? .systemYellow : .white,
+            restTint: sh.pinned ? .systemYellow : NSColor.white.withAlphaComponent(0.5),
+            tip: sh.pinned ? "Lösen (Cmd+P)" : (sh.isBig ? "Anheften (Cmd+P) — große Dateien laufen dann nicht ab" : "Anheften (Cmd+P)"), showAtRest: true, badge: sh.pinned,
+            action: { [weak self] in guard self != nil else { return }; fire(#selector(PanelController.sharedPinClicked(_:))) }))
+        let bar = makeActionBar(acts, rowH: rowH, row: row)
+        v.addSubview(bar)
         v.onHover = { [weak self] in
             guard let self = self, self.editingId == nil else { return }
-            self.expandedRowCollapse?(); self.selectRow(row); expand(); self.expandedRowCollapse = collapse
+            self.expandedRowCollapse?(); self.selectRow(row)
+            bar.setRowHovered(true); self.expandedRowCollapse = { [weak bar] in bar?.setRowHovered(false) }
         }
-        v.onExit = { collapse() }
+        v.onExit = { [weak bar] in bar?.setRowHovered(false) }
         return v
     }
     /// sichtbare Knoepfe einer Zeile: Laden · Abbrechen · Erneut hochladen

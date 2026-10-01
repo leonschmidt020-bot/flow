@@ -69,6 +69,10 @@ final class DictationController {
             else if self.pill.view.mode == .agentPrompt { self.pill.view.mode = self.restingMode() }
         }
         APFlow.shared.actions.toast = { [weak self] m in self?.pill.view.showToast(m, seconds: 2.4) }
+        // Enter in der Ziel-App = Original abgeschickt → Vorschlag geht leise weg
+        HotkeyMonitor.onReturn = { APFlow.shared.returnPressed() }
+        // Erste Vorschlags-Karte ohne Kaltstart (SwiftUI, Schriften, Illustrationen) – unsichtbar, kurz nach dem Start
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { APCard.shared.prewarm() }
     }
 
     var isHandsFree: Bool { state == .recording(handsFree: true) }
@@ -145,6 +149,7 @@ final class DictationController {
         mic.voiceProcessing = false
         mic.callBoost = inCall
         CorrectionLearner.shared.finish()   // neues Diktat → letzter Vergleich, dann altes Mitlesen beenden
+        APFlow.shared.dictationStarted()    // offener Agent-Prompt-Vorschlag weg (nie zwei übereinander), Box vorab lesen
         // Ziel unter der Maus JETZT merken (nicht beim Loslassen) – Maus bewegen beim Sprechen lenkt nicht um
         mouseSession = MouseTarget.shared.begin(enabled: viaHotkey && Settings.shared.mouseTarget)
         ScreenContext.shared.begin()      // Fenstertext für Namen/Begriffe lesen – im Hintergrund, Mikro wartet nicht
@@ -323,6 +328,8 @@ final class DictationController {
             defer { ScreenContext.shared.end(ctxID) }
             defer { TempoGuard.disarm(mark) }
             let t0 = Date()
+            // Fenstertitel für die Agent-Prompt-Erkennung (Browser mit „Claude“ im Titel) – gleichzeitig, wartet auf nichts
+            async let apTitle: String = APFlow.frontTitle()
             // Mac-Ton (für den Musik/YouTube-Filter) gleichzeitig mit der eigentlichen Erkennung auswerten
             async let sysTextTask: String? = macSound ? await sysJob() : nil
             // 1) Erkennen und Stimmabgleich GLEICHZEITIG (spart ~1–2 s).
@@ -421,13 +428,27 @@ final class DictationController {
                 + (settings.logTexts ? ": " + cleaned : ""))
             Dictation.saveDebugText(debugID, cleaned)
             if Task.isCancelled { return }
+            // Agent-Prompt-Erkennung schon hier (Hintergrund) – nach dem Einfügen kommt die Karte dann sofort.
+            // Kurze Diktate warten nicht auf den Fenstertitel.
+            var apTitleNow = ""
+            var apCheckNow: (APDetection, Int)?
+            if words >= 35 {
+                apTitleNow = await apTitle
+                apCheckNow = APFlow.precheck(text: cleaned, duration: dur, bundleID: frontBundle, title: apTitleNow)
+            }
+            let title = apTitleNow, apCheck = apCheckNow
             let tReady = Date()
             let expired = TempoGuard.expiredCount
             await MainActor.run {
                 guard self.state == .transcribing, self.voiceSession == vs else { return }   // inzwischen abgebrochen / neues Diktat
                 self.transcribeJob = nil
                 let tPaste = Date()
-                self.deliver(cleaned)
+                self.deliver(cleaned) { inserted, mouseTarget in
+                    // Langer Auftrag an einen Agenten? Vorschlag sofort nach dem echten Einfügen (vorher fest +0,7 s)
+                    guard let apCheck else { return }
+                    APFlow.shared.afterPaste(text: cleaned, inserted: inserted, duration: dur, bundleID: frontBundle, title: title,
+                                             detection: apCheck, mouseTarget: mouseTarget, pastedAt: Date())
+                }
                 let done = Date()
                 // Was der Nutzer spürt: fn los → Text steht (inkl. 0,12 s Nachlauf, Warten auf den Main-Thread, Einfügen)
                 log(String(format: "Tempo: Loslassen → Text %.2f s (Nachlauf %.2f, Erkennung %.2f, Mac-Ton %.2f, Nachbearbeitung %.2f, Main %.2f, Einfügen %.2f)%@",
@@ -435,11 +456,6 @@ final class DictationController {
                            tReady.timeIntervalSince(tSys) - sysWait, tPaste.timeIntervalSince(tReady), done.timeIntervalSince(tPaste),
                            expired > 0 ? " – Tempo-Garantie: Parakeet-Ergebnis (Whisper zu langsam)" : ""))
                 if !cleaned.isEmpty { DictationHistory.shared.add(text: cleaned, duration: dur) }
-                // Langer Auftrag an einen Agenten? Leiser Vorschlag an der Pille (erst nach dem Einfügen, keine Verzögerung)
-                if words >= 35 {
-                    let text = cleaned
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { APFlow.shared.offerIfLong(text: text, duration: dur, bundleID: frontBundle) }
-                }
             }
             if cleaned.isEmpty { log(String(format: "Leer erkannt – Spitzenpegel %.2f (letzte Aufnahme: ~/.config/flow/letzte-aufnahme.wav)", self.peak)) }
         }
@@ -558,18 +574,26 @@ final class DictationController {
         }
     }
 
-    private func deliver(_ text: String) {
+    /// `onPasted` = nach echtem Einfügen (⌘V geschickt): genau eingefügter Text + Maus-Ziel (nil = vordere App)
+    private func deliver(_ text: String, onPasted: ((String, APTarget?) -> Void)? = nil) {
         state = .idle
         pill.view.mode = restingMode()
         pill.pinnedToScreen = false
         let ms = mouseSession; mouseSession = 0
         guard !text.isEmpty else { MouseTarget.shared.discard(); pill.view.showToast("Nichts erkannt"); return }
-        guard ms > 0 else { insertNow(text); return }
+        guard ms > 0 else { if insertNow(text) { onPasted?(Inserter.lastInsertedText ?? text, nil) }; return }
         // „Text dorthin, wo die Maus ist“: erst Fenster/Feld unter der Maus nach vorne (0 ms, wenn es schon aktiv ist)
         MouseTarget.shared.prepare(ms) { [weak self] prep in
             guard let self else { return }
             if let t = prep.toast { self.pill.view.showToast(t, seconds: 2.4) }
             let pasted = self.insertNow(text)
+            if pasted {
+                // Nur bei 0/a/b/c landete der Text wirklich im Maus-Ziel (d = vorheriges Fenster, – = übersprungen)
+                let t = ["0", "a", "b", "c"].contains(prep.method) ? prep.target.map {
+                    APTarget(pid: $0.pid, windowID: $0.windowID, window: $0.window, bundleID: $0.bundle, appName: $0.appName, title: $0.title)
+                } : nil
+                onPasted?(Inserter.lastInsertedText ?? text, t)
+            }
             let head = "Maus-Ziel: " + (prep.target.map { "\($0.appName) · „\(MTRules.shortTitle($0.title))“ · " } ?? "")
                 + "Methode \(prep.method) (\(prep.note)) · +\(prep.extraMs) ms"
             // Enter nur nach echtem Einfügen und nur, wenn wirklich ins Maus-Ziel eingefügt wurde (0/a/b/c) – bei d landete

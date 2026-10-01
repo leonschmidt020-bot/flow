@@ -17,7 +17,8 @@
 #                      (nur Warnung) · Rückweg-Test gegen eine Schein-App (tests/lib/rollback_test.sh) · --selftest-health
 #   2 CLI-Schutz       unbekannter Befehl = Exit 2 · Binary ohne Bundle verweigert den App-Modus · app.lock · Test-Schutz
 #   3 Wort-Lerner      CorrectionLearner + AliasLearner (Fälle aus der Geschichte) · Maus-Ziel-Logik (--selftest-mouse-target) ·
-#                      Agent-Prompt (--selftest-agent-prompt: Auslöser, Erkennung, Regel-Rückfall, Schein-Claude, Verlauf, Original zuerst, ohne Claude-CLI)
+#                      Agent-Prompt (--selftest-agent-prompt: Auslöser, Erkennung, Regel-Rückfall, Schein-Claude, Verlauf, Original zuerst, ohne Claude-CLI,
+#                      Ersetzen beim „Einfügen“ mit Schein-Box/-Feld, „abgeschickt?“) · --agent-prompt-latency (Einfügen → Karte < 1 s)
 #   3b Oberfläche      --pill-ring-render, --shared-inbox-render, --update-badge-render (+ Fehler-Karte), --agent-prompt-render
 #                      (alle Karten-Zustände) (+ --render-hub im vollen Lauf)
 #   4 Erkennung        TTS-Testset durch die echte Pipeline: WER/Namen (+1,5 Punkte), Latenz (+30 %), Stimmabgleich
@@ -284,6 +285,11 @@ if [ $BUILD_OK -eq 1 ]; then
   echo "$ao" > "$T/agent-prompt.out"
   check "$rc" "Agent-Prompt (--selftest-agent-prompt)" "$(echo "$ao" | tail -1)"
   { echo "$ao" | grep "FEHLER" || true; } | while IFS= read -r l; do row FAIL "Agent-Prompt: $(echo "$l" | sed 's/^ *FEHLER *//')"; done
+  # Vorschlags-Karte: Einfügen → lesbar (offscreen gemessen, Exit 0 nur unter 1 s)
+  set +e
+  lo="$(FLOW_HOME="$T/h-aplat" with_timeout 60 "$BIN" --agent-prompt-latency 2>&1)"; rc=$?
+  set -e
+  check "$rc" "Agent-Prompt-Vorschlag: Einfügen → Karte < 1 s (--agent-prompt-latency)" "$(echo "$lo" | grep '^NACHHER' | sed 's/^NACHHER *//')"
   sweep
   step_end
 else
@@ -307,7 +313,7 @@ if [ $BUILD_OK -eq 1 ]; then
   # Agent-Prompt-Karten: Vorschlag, wird gebaut, fertig (+ Hover, Original, EN, Regeln), abgebrochen, fehlgeschlagen, Hub
   set +e; FLOW_HOME="$RD/h-ap" with_timeout 90 "$BIN" --agent-prompt-render "$RD/agent-prompt" > "$RD/agent-prompt.log" 2>&1; rc=$?; set -e
   bad=""
-  for f in 1_vorschlag 2b_baut_live 3a_fertig 3c_fertig_original 4a_abgebrochen 4b_fehlgeschlagen 6_hub_prompts 7b_ohne_claude_fertig; do png_ok "$RD/agent-prompt/$f.png" || bad="$bad $f"; done
+  for f in 1_vorschlag 1b_vorschlag_verblasst 2b_baut_live 3a_fertig 3c_fertig_original 3f_fertig_abgeschickt 4a_abgebrochen 4b_fehlgeschlagen 6_hub_prompts 7b_ohne_claude_fertig; do png_ok "$RD/agent-prompt/$f.png" || bad="$bad $f"; done
   check "$([ $rc -eq 0 ] && [ -z "$bad" ] && echo 0 || echo 1)" "--agent-prompt-render: Karten-Zustände + Hub" "exit ${rc}, $(ls "$RD/agent-prompt"/*.png 2>/dev/null | wc -l | tr -d ' ') Bilder${bad:+, fehlen/leer:${bad}}"
   if [ $QUICK -eq 0 ]; then
     set +e; FLOW_HOME="$RD/h" CLIPVAULT_HOME="$RD/cv" with_timeout 240 "$BIN" --render-hub "$RD/hub" demo > "$RD/hub.log" 2>&1; rc=$?; set -e

@@ -23,7 +23,7 @@ enum APMode: String, Codable, CaseIterable, Identifiable {
     }
     var detail: String {
         switch self {
-        case .on: return "„Prompt: …“ baut sofort einen Prompt. Lange Aufträge an einen Agenten erkennt Flow selbst und bietet es an (nur mit Claude-CLI)."
+        case .on: return "„Prompt: …“ baut sofort einen Prompt. Lange Aufträge an einen Agenten erkennt Flow selbst und bietet es gleich nach dem Einfügen an – „Einfügen“ ersetzt dann dein Diktat durch den Prompt (nur mit Claude-CLI)."
         case .explicitOnly: return "Nur wenn du „Prompt: …“ oder „Ich mache jetzt einen Prompt …“ sagst."
         case .off: return "Nie – „Prompt …“ wird normal eingefügt."
         }

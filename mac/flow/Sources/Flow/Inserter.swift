@@ -11,6 +11,10 @@ enum Inserter {
 
     static var accessibilityTrusted: Bool { AXIsProcessTrusted() }
     private static var lastInsert: (text: String, app: String, at: Date)?
+    /// Genau so zuletzt eingefügt (inkl. ergänztem Leerzeichen davor) – der Agent-Prompt merkt sich damit die Stelle
+    static var lastInsertedText: String? { lastInsert?.text }
+    /// Agent-Prompt hat das Original gelöscht: die „direkt nach dem letzten Diktat → Leerzeichen“-Regel gilt nicht mehr
+    static func forgetLast() { lastInsert = nil }
 
     /// `source` = Quelle in ClipVault (Agent-Prompt fügt als „Agent-Prompt“ ein, nicht als „Diktat“)
     static func insert(_ raw: String, source: String = "Diktat") -> Outcome {

@@ -38,7 +38,10 @@ Alle Selbsttests/Renders mit `FLOW_HOME=<leerer Ordner>`.
 
 Agent-Prompts (Standard „An“, Einstellungen › Diktat): ohne Claude-CLI bleiben Vorschläge bei langen Aufträgen bewusst
 aus – der Regel-Umbau sortiert nur und formuliert nichts um, das lohnt keine ungefragte Unterbrechung (der Text steht
-ja schon da). Wer ihn will, sagt „Prompt: …“. Code: `Sources/Flow/VoiceFlow/AgentPrompt/`, Verlauf `~/.config/flow/prompts/`.
+ja schon da). Wer ihn will, sagt „Prompt: …“. Mit Claude-CLI kommt der Vorschlag sofort nach dem Einfügen (< 1 s);
+„Einfügen“ ersetzt dann das noch nicht abgeschickte Diktat im Eingabefeld durch den Prompt (Claude Code im Terminal:
+nachgelesen über die Eingabebox, Textfelder: markiert und überschrieben – nie etwas löschen, das Flow nicht selbst
+eingefügt hat). Wird das Diktat abgeschickt, geht der Vorschlag leise weg. Tempo: `--agent-prompt-latency`. Code: `Sources/Flow/VoiceFlow/AgentPrompt/`, Verlauf `~/.config/flow/prompts/`.
 
 ## Release-Tor
 

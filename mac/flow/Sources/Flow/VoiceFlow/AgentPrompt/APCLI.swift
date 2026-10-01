@@ -8,6 +8,8 @@ import SwiftUI
 //                                                           (atomar, kaputte Dateien), Ablauf (Original zuerst gesichert,
 //                                                           Abbrechen/Fehler → Original einfügen/kopieren). Kein Claude, keine Zwischenablage.
 //   FLOW_HOME=<leer> Flow --agent-prompt-render <ordner>  alle Karten-Zustände + Hub-Ansicht als PNG
+//                                                           + Ersetzen beim „Einfügen“ (Schein-Box/Schein-Feld), „abgeschickt?“
+//   FLOW_HOME=<leer> Flow --agent-prompt-latency          Einfügen → Vorschlags-Karte: vorher/nachher (ms), offscreen
 //   Flow --agent-prompt-detect "Text" [Sekunden] [Bundle-ID] [Fenstertitel]   Punktzahl + Gründe
 //   FLOW_HOME=<leer> Flow --agent-prompt-build <text|@datei> [--rules] [--model sonnet] [--effort low]
 //                                                           ECHTER Claude-Aufruf (Qualität/Zeit prüfen), druckt Prompt + Zeiten
@@ -26,6 +28,7 @@ enum APCLI {
             if let m = APTrigger.match(a2) { print("Auslöser „\(m.phrase)“ → „\(m.body)“") }
             return 0
         case "--agent-prompt-build": return SelfTestCLI.guardedHome { build(args) }
+        case "--agent-prompt-latency": return SelfTestCLI.guardedHome { latency() }
         default: return nil
         }
     }
@@ -140,12 +143,15 @@ enum APCLI {
             ("3c_fertig_original", .done(long), 1, false, true, nil, "illu_prompt_fertig_3"),
             ("3d_fertig_kurz_en", .done(en), 1, false, false, nil, "illu_prompt_fertig_4"),
             ("3e_fertig_regeln", .done(rules), 1, false, false, nil, nil),
+            ("3f_fertig_abgeschickt", .done(long, sent: true), 1, false, false, nil, "illu_prompt_fertig"),
             ("4a_abgebrochen", .stopped(.cancelled, reason: "Abgebrochen", original: sampleOriginalDE), 1, false, false, nil, nil),
             ("4b_fehlgeschlagen", .stopped(.failed, reason: "Claude nicht erreichbar", original: sampleOriginalDE), 1, false, false, nil, nil),
             ("5a_pille_rechts_hochkant", .done(long), 1, false, false, pillRightEdge, nil),
             ("5b_pille_links_hochkant", .building(partial: partial, words: 118, started: now), 1, false, false, pillLeftEdge, nil),
         ]
         var ok = 0
+        // Leises Ausblenden (Original abgeschickt): Zwischenbild bei halber Deckkraft
+        if APCard.renderPNG(.offer(det), to: d.appendingPathComponent("1b_vorschlag_verblasst.png"), opacity: 0.45) { ok += 1 }
         for (name, phase, prog, hover, orig, pill, illu) in shots {
             let u = d.appendingPathComponent("\(name).png")
             if APCard.renderPNG(phase, to: u, progress: prog, hovering: hover, showOriginal: orig, pill: pill ?? pillBottom, illustration: illu) { ok += 1 }
@@ -175,7 +181,7 @@ enum APCLI {
             if let png = rep.representation(using: .png, properties: [:]), (try? png.write(to: d.appendingPathComponent("6_hub_prompts.png"))) != nil { ok += 1 }
         }
         try? FileManager.default.removeItem(at: hubDir)
-        let total = shots.count + extra.count + 1
+        let total = shots.count + extra.count + 2
         print("\(ok)/\(total) Bilder nach \(dir)")
         return ok == total ? 0 : 1
     }
@@ -189,11 +195,90 @@ final class APFakePresenter: APPresenter {
     var closed = 0
     var flashes: [APCardFlash] = []
     var onAction: (APCardAction) -> Void = { _ in }
+    var faded = 0
     private(set) var isShowing = false
     func show(_ phase: APCardPhase) { shown.append(phase); isShowing = true }
     func close() { closed += 1; isShowing = false }
+    func fadeOut() { faded += 1; isShowing = false }
     func flash(_ what: APCardFlash) { flashes.append(what) }
     var last: APCardPhase? { shown.last }
+    var phase: APCardPhase? { isShowing ? shown.last : nil }
+}
+
+/// Schein-Ziel für das Ersetzen: Claude-Code-Box (gezeichnet wie im Terminal, umbrochen) oder Textfeld – mit Schreibmarke
+final class APFakeIO: APReplaceIO {
+    var buffer: [Character]
+    var cursor: Int
+    var sent: [String] = []
+    var field = false
+    var secure = false
+    var canSelect = true
+    var selection: NSRange?
+    /// Claude Code löscht einen Platzhalter mit EINER Rücktaste (sonst Zeichen für Zeichen)
+    var unitPlaceholders = false
+    var width = 58
+    /// Träges Terminal: Rücktasten kommen erst beim Lesen an (höchstens so viele je Lesung) – 0 = sofort
+    var lagPerRead = 0
+    private var pending = 0
+    private(set) var backspaces = 0
+    private(set) var typed: [Character] = []
+    private(set) var reads = 0
+
+    init(_ text: String, cursor: Int? = nil) { buffer = Array(text); self.cursor = cursor ?? text.count }
+    var text: String { String(buffer) }
+
+    func isSecure() -> Bool { secure }
+
+    /// Zeilen wie Claude Code: Verlauf („❯ …“ + Antwort), Trennlinie, „❯ “ + umbrochener Text, Trennlinie, Statuszeile
+    func rows() -> [String] {
+        var r: [String] = []
+        for m in sent { r.append("❯ " + m); r.append("⏺ Erledigt."); r.append("") }
+        let rule = String(repeating: "─", count: width + 4)
+        r.append(rule)
+        var lines: [String] = []
+        var cur = ""
+        for w in text.split(separator: " ", omittingEmptySubsequences: false) {
+            if cur.count + w.count + 1 > width, !cur.isEmpty { lines.append(cur); cur = String(w) }
+            else { cur = cur.isEmpty ? String(w) : cur + " " + w }
+        }
+        lines.append(cur)
+        r.append("❯\u{00A0}" + lines[0])
+        for l in lines.dropFirst() { r.append("  " + l) }
+        r.append(rule)
+        r.append("  ⏵⏵ accept edits on")
+        return r
+    }
+
+    func readBox() -> TerminalPrompt.Screen? {
+        reads += 1
+        if pending > 0 { let n = min(pending, lagPerRead); pending -= n; apply(n) }
+        return field ? nil : TerminalPrompt.parse(rows())
+    }
+    func readField() -> (value: String, selection: NSRange?)? {
+        reads += 1
+        guard field else { return nil }
+        return (text, selection ?? NSRange(location: String(buffer[..<cursor]).utf16.count, length: 0))
+    }
+    func select(_ r: NSRange) -> Bool { guard canSelect else { return false }; selection = r; return true }
+    func backspace(_ n: Int) {
+        backspaces += n
+        if lagPerRead > 0 { pending += n } else { apply(n) }
+    }
+    private func apply(_ n: Int) {
+        for _ in 0..<n {
+            selection = nil
+            if unitPlaceholders {
+                let before = String(buffer[..<cursor])
+                if let ph = APReplace.placeholders(before).last, ph.range.upperBound == before.endIndex {
+                    let len = before[ph.range].count
+                    buffer.removeSubrange((cursor - len)..<cursor); cursor -= len; continue
+                }
+            }
+            if cursor > 0 { buffer.remove(at: cursor - 1); cursor -= 1 }
+        }
+    }
+    func type(_ c: Character) { typed.append(c); buffer.insert(c, at: cursor); cursor += 1 }
+    func sleep(_ s: Double) { usleep(1_000) }
 }
 
 enum APSelfTest {
@@ -207,6 +292,9 @@ enum APSelfTest {
         store(t)
         flow(t)
         withoutClaude(t)
+        replace(t)
+        replaceRun(t)
+        sentFlow(t)
         return t.finish("Agent-Prompt")
     }
 
@@ -389,6 +477,11 @@ enum APSelfTest {
         a.addHistory = { h, _ in history.append(h) }
         a.captureTarget = { _ in (nil, APContext(appName: "Terminal", bundleID: APTestSet.term, windowTitle: "claude")) }
         a.claudeAvailable = { true }
+        a.snapshot = { _, _, _, done in done(.unknown("Test"), nil, nil, nil) }
+        a.probe = { _, done in done(.intact) }
+        a.preRead = { _ in }
+        var replaced: [String] = []
+        a.replace = { prompt, _, done in replaced.append(prompt); done(.cleared, true) }
         var mode = "ok"
         let flow = APFlow(testing: APPrefs(), store: APStore(dir: dir), presenter: pres, actions: a)
         flow.makeBuilder = { _ in
@@ -422,7 +515,7 @@ enum APSelfTest {
         t.check(history.first?.hasPrefix("Bitte bau den Export") == true, "Original im Diktat-Verlauf")
         t.check(copies.last?.1 == APFlow.sourcePrompt && copies.last?.0 == APCLI.samplePromptDE, "Prompt danach als „Agent-Prompt“ (Zwischenablage endet mit Prompt)")
         t.check(pres.shown.first.map { if case .building = $0 { return true }; return false } == true, "Karte zeigt sofort „wird gebaut“")
-        guard case .done(let rec)? = pres.last else { t.check(false, "fertig-Karte", "\(String(describing: pres.last))"); return }
+        guard case .done(let rec, _)? = pres.last else { t.check(false, "fertig-Karte", "\(String(describing: pres.last))"); return }
         t.check(rec.original.hasPrefix("Bitte bau den Export") && rec.prompt == APCLI.samplePromptDE, "Verlauf-Eintrag hat Prompt UND Original")
         t.check(APStore(dir: dir).records.count == 1, "Verlauf auf der Platte")
         pres.onAction(.copyOriginal)
@@ -475,6 +568,11 @@ enum APSelfTest {
         copies = []
         pres.onAction(.build); waitEnd()
         t.check(copies.map(\.1) == [APFlow.sourcePrompt], "Vorschlag angenommen: Original war schon eingefügt, nur der Prompt kommt dazu", "\(copies.map(\.1))")
+        inserts = []
+        pres.onAction(.insert)
+        t.check(replaced == [APCLI.samplePromptDE] && inserts.isEmpty, "Vorschlag: „Einfügen“ ersetzt das Original (nicht nur einfügen)", "\(replaced.count) ersetzt, \(inserts.count) eingefügt")
+        pres.onAction(.insert)
+        t.check(replaced.count == 1 && inserts.count == 1, "zweites „Einfügen“ fügt nur noch ein (Original ist schon ersetzt)")
         pres.close()
         _ = flow.offerIfLong(text: "Ja passt, mach so.", duration: 2, bundleID: APTestSet.term)
         t.check(!pres.isShowing, "kurzes Diktat → keine Karte")
@@ -497,6 +595,9 @@ extension APSelfTest {
         a.addHistory = { _, _ in }
         a.captureTarget = { _ in (nil, APContext(appName: "Terminal", bundleID: APTestSet.term, windowTitle: "claude")) }
         a.claudeAvailable = { false }
+        a.preRead = { _ in }
+        a.snapshot = { _, _, _, done in done(.unknown("Test"), nil, nil, nil) }
+        a.probe = { _, done in done(.intact) }
         let flow = APFlow(testing: APPrefs(), store: APStore(dir: dir), presenter: pres, actions: a)
         flow.makeBuilder = { _ in
             let b = APBuilder(); b.available = { false }
@@ -513,13 +614,333 @@ extension APSelfTest {
         RunLoop.main.run(until: Date().addingTimeInterval(0.05))
         t.check(r == true, "ohne Claude: „Prompt: …“ wird trotzdem abgefangen")
         t.check(!ran, "ohne Claude: kein Claude-Aufruf")
-        guard case .done(let rec)? = pres.last else { t.check(false, "ohne Claude: fertig-Karte", "\(String(describing: pres.last))"); return }
+        guard case .done(let rec, _)? = pres.last else { t.check(false, "ohne Claude: fertig-Karte", "\(String(describing: pres.last))"); return }
         t.check(rec.byRules && rec.note == "Claude-CLI fehlt", "ohne Claude: Regel-Prompt mit Grund", "\(rec.source) \(rec.note)")
         t.check(rec.prompt.contains("users.controller.ts") && rec.prompt.contains("## Aufgabe"), "ohne Claude: Regel-Prompt behält Details")
         t.check(copies.first?.1 == APFlow.sourceOriginal && copies.last?.1 == APFlow.sourcePrompt, "ohne Claude: erst Original, dann Prompt in die Zwischenablage",
                 "\(copies.map(\.1))")
         t.check(APCardStyle.rulesLabel(rec.note) == "Regeln · ohne Claude-CLI", "Karte: leiser Hinweis „ohne Claude-CLI“", APCardStyle.rulesLabel(rec.note))
         t.check(APCardStyle.rulesLabel("Zeitlimit (45 s)") == "Regeln · Zeitlimit (45 s)", "Karte: Grund bei Claude-Fehler")
+    }
+
+    static let ins = " Bau bitte den Export so um, dass CSV und PDF gehen, und lass danach alle Tests laufen."
+
+    static func box(_ input: String, sent: [String] = []) -> TerminalPrompt.Screen {
+        let io = APFakeIO(input); io.sent = sent
+        return TerminalPrompt.parse(io.rows())
+    }
+
+    // Reine Logik: Stelle merken + entscheiden
+    static func replace(_ t: SelfTestChecks) {
+        t.section("Ersetzen: Stelle merken + entscheiden (reine Logik)")
+        let x = ins.trimmingCharacters(in: .whitespaces)
+        // Box: Text ausgeschrieben (umbrochen über mehrere Zeilen)
+        let m1 = APReplace.markBox(inserted: ins, screen: box("Hallo Claude," + ins), pre: nil)
+        guard case .found(let mb)? = m1, case .box(let b1, _, let a1, _) = mb else { t.check(false, "Box: Text gefunden", "\(String(describing: m1))"); return }
+        t.check(APReplace.squash(b1) == "HalloClaude," && a1.isEmpty, "Box: Text davor bleibt Text davor, umbrochen gefunden", "„\(b1)“ / „\(a1)“")
+        t.check(APReplace.judgeBox(mb, now: box("Hallo Claude," + ins)) == .intact, "Box unverändert → intakt")
+        t.check(APReplace.judgeBox(mb, now: box("")) == .sent, "Box leer → abgeschickt")
+        t.check(APReplace.judgeBox(mb, now: box("", sent: ["Hallo Claude," + ins])) == .sent, "neuer ❯-Block im Verlauf → abgeschickt")
+        t.check(APReplace.judgeBox(mb, now: box("Hallo Claude, Bau bitte den Import so um, dass CSV und PDF gehen, und lass danach alle Tests laufen.")) == .edited,
+                "ein Wort im Original geändert → geändert (nichts löschen)")
+        t.check(APReplace.judgeBox(mb, now: box("Hallo Claude," + ins + " Und schnell!")) == .edited, "danach weitergetippt → geändert (Schreibmarke unbekannt)")
+        t.check(APReplace.judgeBox(mb, now: TerminalPrompt.parse(["~ % ls", "datei.txt"])) == .unreadable("keine Claude-Code-Eingabebox"), "keine Box → nicht prüfbar")
+        t.check(APReplace.judgeBox(mb, now: nil) == .unreadable("Terminal nicht lesbar"), "nicht lesbar → nicht prüfbar")
+        // Schon vor dem Nachlesen abgeschickt
+        t.check(APReplace.markBox(inserted: ins, screen: box("", sent: [x]), pre: box("")) == .sentAlready, "beim Nachlesen schon im Verlauf → „schon abgeschickt“")
+        t.check(APReplace.markBox(inserted: ins, screen: box("Hallo"), pre: nil) == nil, "noch nicht gezeichnet → weiter nachlesen")
+        // Eingeklappt („[Pasted text #2 +12 lines]“): nur mit Stand vor dem Diktat
+        let ph = "[Pasted text #2 +12 lines]"
+        let pre = box("Kurz vorweg: [Pasted text #1 +3 lines] ")
+        let mc = APReplace.markBox(inserted: ins, screen: box("Kurz vorweg: [Pasted text #1 +3 lines] " + ph), pre: pre)
+        if case .found(.box(_, let shown, _, _))? = mc { t.check(shown == ph, "eingeklappt: NEUER Platzhalter ist unserer (alter #1 bleibt)", shown) }
+        else { t.check(false, "eingeklappt erkannt", "\(String(describing: mc))") }
+        if case .unknown? = APReplace.markBox(inserted: ins, screen: box(ph), pre: nil) { t.check(true, "eingeklappt ohne Stand vorher → nie löschen") }
+        else { t.check(false, "eingeklappt ohne Stand vorher → nie löschen") }
+        t.check(APReplace.markBox(inserted: ins, screen: box("[Pasted text #1 +3 lines]"), pre: box("[Pasted text #1 +3 lines]")) == nil,
+                "nur der alte Platzhalter (vom Nutzer) → nicht unserer")
+        if case .unknown? = APReplace.markBox(inserted: ins, screen: box("Anders " + ph), pre: box("Kurz")) { t.check(true, "eingeklappt, aber Box sonst auch geändert → nie löschen") }
+        else { t.check(false, "eingeklappt + Box geändert → nie löschen") }
+        // Textfeld
+        let v = "Hi," + ins
+        guard case .found(let mf)? = APReplace.markField(inserted: ins, value: v, cursor: (v as NSString).length) else { t.check(false, "Feld: Text gefunden"); return }
+        let (fv, fr) = APReplace.judgeField(mf, value: v)
+        t.check(fv == .intact && fr == NSRange(location: 3, length: (ins as NSString).length), "Feld unverändert → intakt, genauer Bereich", "\(fv) \(String(describing: fr))")
+        let (ev, er) = APReplace.judgeField(mf, value: "Moin! Hi," + ins + " PS")
+        t.check(ev == .intact && er?.location == 9, "Feld: drumherum getippt, Original unversehrt → Bereich verschoben gefunden", "\(ev) \(String(describing: er))")
+        t.check(APReplace.judgeField(mf, value: "Hi, Bau bitte den Export so um").0 == .edited, "Feld: Original verändert → geändert")
+        t.check(APReplace.judgeField(mf, value: "").0 == .sent, "Feld geleert → abgeschickt")
+        t.check(APReplace.judgeField(mf, value: "Hi,").0 == .sent, "Feld wieder wie vorher → abgeschickt")
+        let twice = APReplace.judgeField(mf, value: "Hi," + ins + ins)
+        t.check(twice.0 == .intact && twice.1?.location == 3, "Original zweimal da, eines an der alten Stelle → genau das alte", "\(twice)")
+        t.check(APReplace.judgeField(mf, value: "Moin" + ins + ins).0 == .edited, "Original zweimal da, keines an der alten Stelle → geändert (nichts löschen)")
+        // Wie viel steht noch?
+        let m = APMark.box(before: "Hallo ", shown: "ab cd", after: "", sentBefore: [])
+        t.check(APReplace.remaining(m, now: "Hallo ab cd") == 5 && APReplace.remaining(m, now: "Hallo ab c") == 4 && APReplace.remaining(m, now: "Hallo ab") == 2
+                && APReplace.remaining(m, now: "Hallo ") == 0 && APReplace.remaining(m, now: "Hall ab cd") == nil,
+                "Rest unseres Textes: kleinstes k, fremde Änderung → nil")
+        t.check(APReplace.deletedChar(before: "Hallo ab cd", after: "Halo ab cd") == "l", "falsch gelöschtes Zeichen erkannt")
+    }
+
+    // Ablauf „Einfügen“ mit Schein-Box / Schein-Feld
+    static func replaceRun(_ t: SelfTestChecks) {
+        t.section("Ersetzen: „Einfügen“ mit Schein-Box / Schein-Feld")
+        APReplaceRun.stepTimeout = 0.05; APReplaceRun.quiet = 0.02
+        func pasted(_ io: APFakeIO, pre: TerminalPrompt.Screen? = nil) -> APPasted {
+            let p = APPasted(text: ins)
+            p.state = io.field ? (APReplace.markField(inserted: ins, value: io.text, cursor: String(io.buffer[..<io.cursor]).utf16.count) ?? .pending)
+                               : (APReplace.markBox(inserted: ins, screen: TerminalPrompt.parse(io.rows()), pre: pre) ?? .pending)
+            return p
+        }
+        // 1) noch da → gelöscht, Text davor bleibt
+        let a = APFakeIO("Kontext von vorhin:" + ins)
+        let pa = pasted(a)
+        t.check(APReplaceRun.run(pa.state, io: a) == .cleared && a.text == "Kontext von vorhin:", "Box: Original noch da → gelöscht, eigener Text davor bleibt", "„\(a.text)“")
+        t.check(a.backspaces == ins.count, "genau so viele Rücktasten wie eingefügte Zeichen", "\(a.backspaces) / \(ins.count)")
+        // 2) schon abgeschickt → nichts löschen
+        let b = APFakeIO(ins); let pb = pasted(b)
+        b.sent = [ins.trimmingCharacters(in: .whitespaces)]; b.buffer = []; b.cursor = 0
+        t.check(APReplaceRun.run(pb.state, io: b) == .insertNew(hint: APReplaceOutcome.hintSent, why: "abgeschickt") && b.backspaces == 0,
+                "abgeschickt → nichts gelöscht, neu einfügen + „Original war schon abgeschickt“")
+        // 3) im Original korrigiert → nichts löschen
+        let c = APFakeIO(ins); let pc = pasted(c)
+        c.buffer = Array(ins.replacingOccurrences(of: "Export", with: "Import")); c.cursor = c.buffer.count
+        if case .insertNew(let h, _) = APReplaceRun.run(pc.state, io: c) { t.check(h == APReplaceOutcome.hintEdited && c.backspaces == 0, "im Original geändert → nichts gelöscht, Hinweis") }
+        else { t.check(false, "im Original geändert → nichts gelöscht") }
+        // 4) danach weitergetippt → nichts löschen
+        let d = APFakeIO(ins); let pd = pasted(d)
+        d.buffer += Array(" Danke!"); d.cursor = d.buffer.count
+        t.check(APReplaceRun.run(pd.state, io: d) == .insertNew(hint: APReplaceOutcome.hintEdited, why: "seit dem Einfügen geändert") && d.backspaces == 0 && d.text.hasSuffix("Danke!"),
+                "danach weitergetippt → eigener Text bleibt, nichts gelöscht")
+        // 5) Schreibmarke woanders (Text gleich) → erste Rücktaste trifft fremdes Zeichen → sofort zurückgeschrieben, Schluss
+        let e = APFakeIO("Hallo Welt." + ins); let pe = pasted(e)
+        e.cursor = 5
+        let re = APReplaceRun.run(pe.state, io: e)
+        t.check(e.text == "Hallo Welt." + ins && e.backspaces == 1 && e.typed == ["o"], "Schreibmarke woanders → 1 Zeichen, sofort zurückgeschrieben, Text unverändert",
+                "„\(e.text.prefix(20))…“ \(e.backspaces) Rücktasten, \(e.typed)")
+        if case .insertNew(let h, _) = re { t.check(h == APReplaceOutcome.hintEdited, "… und Prompt nur neu eingefügt (Hinweis)") } else { t.check(false, "Schreibmarke woanders → kein Löschen") }
+        // 6) eingeklappt: Platzhalter mit einer Rücktaste bzw. Zeichen für Zeichen
+        for unit in [true, false] {
+            let ph = "[Pasted text #4 +9 lines]"
+            let f = APFakeIO("Bitte: " + ph); f.unitPlaceholders = unit
+            let pf = pasted(f, pre: box("Bitte: "))
+            t.check(APReplaceRun.run(pf.state, io: f) == .cleared && f.text == "Bitte: ", "eingeklappt (\(unit ? "eine Rücktaste" : "Zeichen für Zeichen")) → nur der Platzhalter weg", "„\(f.text)“, \(f.backspaces) Rücktasten")
+        }
+        // 6b) träges Terminal (Claude Code zeichnet verzögert): nie mehr löschen als unser Text
+        let lag = APFakeIO("Erst das hier." + ins); lag.lagPerRead = 7
+        let pl0 = pasted(lag)
+        t.check(APReplaceRun.run(pl0.state, io: lag) == .cleared && lag.text == "Erst das hier." && lag.backspaces == ins.count,
+                "träges Terminal → genau unser Text gelöscht, kein Zeichen mehr", "„\(lag.text)“, \(lag.backspaces) Rücktasten")
+        // 7) Passwortfeld / sichere Eingabe → nichts gelesen, nichts gelöscht
+        let g = APFakeIO(ins); let pg = pasted(g); g.secure = true
+        let readsBefore = g.reads
+        t.check(APReplaceRun.run(pg.state, io: g) == .insertNew(hint: nil, why: "Passwortfeld/sichere Eingabe – nichts gelesen") && g.backspaces == 0 && g.reads == readsBefore,
+                "sichere Eingabe → nichts gelesen, nichts gelöscht")
+        // 8) Stelle nie gefunden → nichts löschen
+        let h = APFakeIO(ins); let ph = APPasted(text: ins)
+        t.check(APReplaceRun.run(ph.state, io: h) == .insertNew(hint: APReplaceOutcome.hintUnknown, why: "Stelle beim Einfügen noch nicht gefunden") && h.backspaces == 0,
+                "Stelle unbekannt → nichts gelöscht")
+        // 9) Textfeld: markieren + darüber einfügen
+        let i = APFakeIO("Hi," + ins); i.field = true
+        let pi = pasted(i)
+        t.check(APReplaceRun.run(pi.state, io: i) == .selected && i.selection == NSRange(location: 3, length: (ins as NSString).length) && i.backspaces == 0,
+                "Feld: genau das Original markiert (Prompt ersetzt es beim Einfügen)", "\(String(describing: i.selection))")
+        // 10) Feld lässt sich nicht markieren, Schreibmarke am Ende → Rücktaste
+        let j = APFakeIO("Hi," + ins); j.field = true; j.canSelect = false
+        let pj = pasted(j)
+        t.check(APReplaceRun.run(pj.state, io: j) == .cleared && j.text == "Hi,", "Feld ohne Markieren, Schreibmarke am Ende → Rücktaste, „Hi,“ bleibt", "„\(j.text)“")
+        // 11) … Schreibmarke woanders → nichts löschen
+        let k = APFakeIO("Hi," + ins); k.field = true; k.canSelect = false
+        let pk = pasted(k); k.cursor = 2
+        if case .insertNew = APReplaceRun.run(pk.state, io: k) { t.check(k.backspaces == 0, "Feld ohne Markieren, Schreibmarke woanders → nichts gelöscht") }
+        else { t.check(false, "Feld ohne Markieren, Schreibmarke woanders → nichts gelöscht") }
+        // 12) Feld: drumherum getippt, Original unversehrt → trotzdem genau markiert
+        let l = APFakeIO("Hi," + ins); l.field = true
+        let pl = pasted(l); l.buffer = Array("Moin! Hi," + ins + " PS"); l.cursor = l.buffer.count
+        t.check(APReplaceRun.run(pl.state, io: l) == .selected && l.selection?.location == 9, "Feld: drumherum geändert, Original unversehrt → nur das Original markiert")
+        // 13) Feld geleert (abgeschickt)
+        let n = APFakeIO("Hi," + ins); n.field = true
+        let pn = pasted(n); n.buffer = []; n.cursor = 0
+        t.check(APReplaceRun.run(pn.state, io: n) == .insertNew(hint: APReplaceOutcome.hintSent, why: "abgeschickt"), "Feld geleert → „Original war schon abgeschickt“")
+        APReplaceRun.stepTimeout = 1.5; APReplaceRun.quiet = 0.35
+    }
+
+    // Ablauf: Vorschlag sofort, „abgeschickt?“, Enter, neues Diktat, Bauen während abgeschickt wird
+    static func sentFlow(_ t: SelfTestChecks) {
+        t.section("Vorschlag: sofort, abgeschickt → leise weg, Enter, neues Diktat")
+        let dir = Paths.base.appendingPathComponent("prompts-sent-\(UUID().uuidString.prefix(6))")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let pres = APFakePresenter()
+        var a = APActions()
+        var inserts: [String] = [], replaced: [String] = [], toasts: [String] = [], probes = 0, snaps = 0
+        var verdict: APVerdict = .intact
+        var front: pid_t = 4242
+        a.copy = { _, _ in }
+        a.insert = { text, _, _, done in inserts.append(text); done(true) }
+        a.addHistory = { _, _ in }
+        a.openHub = { _ in }
+        a.toast = { toasts.append($0) }
+        a.preRead = { done in done(4242, nil) }
+        a.snapshot = { p, _, _, done in
+            snaps += 1
+            done(.found(.box(before: "", shown: p.text, after: "", sentBefore: [])),
+                 APTarget(pid: 4242, windowID: nil, window: nil, bundleID: APTestSet.vsc, appName: "Code", title: "x"), nil, nil)
+        }
+        a.probe = { _, done in probes += 1; done(verdict) }
+        var outcome: APReplaceOutcome = .cleared
+        a.replace = { prompt, _, done in replaced.append(prompt); done(outcome, true) }
+        a.frontPID = { front }
+        a.claudeAvailable = { true }
+        let oldPoll = (APFlow.pollOffer, APFlow.pollBuilding)
+        APFlow.pollOffer = 0.03; APFlow.pollBuilding = 0.06
+        defer { APFlow.pollOffer = oldPoll.0; APFlow.pollBuilding = oldPoll.1 }
+        let flow = APFlow(testing: APPrefs(), store: APStore(dir: dir), presenter: pres, actions: a)
+        var buildMs: UInt64 = 50_000_000
+        flow.makeBuilder = { _ in
+            let b = APBuilder(); b.available = { true }; b.timeout = 3
+            b.runner = { _, _, _, _, _, _ in try await Task.sleep(nanoseconds: buildMs); return APCLI.samplePromptDE }
+            return b
+        }
+        func paste(_ text: String = APTestSet.longDE1) -> APDetection? {
+            let det = APFlow.precheck(text: text, duration: 40, bundleID: APTestSet.vsc, title: "SettingsPanel.tsx")
+            return flow.afterPaste(text: text, inserted: " " + text, duration: 40, bundleID: APTestSet.vsc, detection: det, pastedAt: Date())
+        }
+        func isOffer(_ p: APCardPhase?) -> Bool { if case .offer? = p { return true }; return false }
+
+        // Sofort: Karte im selben Durchlauf, ohne Verzögerung
+        let t0 = Date()
+        _ = paste()
+        let ms = Int(Date().timeIntervalSince(t0) * 1000)
+        t.check(isOffer(pres.phase) && ms < 100, "Vorschlag erscheint sofort nach dem Einfügen (ohne 0,7-s-Pause)", "\(ms) ms")
+        t.check((flow.lastOfferMs ?? 9999) < 1000, "gemessen: Einfügen → Karte lesbar < 1 s", "\(flow.lastOfferMs ?? -1) ms")
+        t.check(snaps == 1 && flow.offer?.pasted.text.hasPrefix(" Okay") == true, "Stelle wird gemerkt (genau eingefügter Text inkl. Leerzeichen)")
+        // Box bleibt → Karte bleibt
+        spin(0.15) { false }
+        t.check(isOffer(pres.phase) && probes >= 2, "Original noch da → Karte bleibt (alle 250 ms nachgelesen)", "\(probes) Lesungen")
+        // Abgeschickt (Box leer / neuer ❯-Block) → leise weg
+        verdict = .sent
+        spin(1) { !pres.isShowing }
+        t.check(!pres.isShowing && pres.faded == 1 && flow.offer == nil, "abgeschickt → Vorschlag leise ausgeblendet (kein Toast)", "verblasst \(pres.faded)×, \(toasts)")
+        t.check(toasts.isEmpty, "kein Toast beim Ausblenden")
+        let p1 = probes
+        spin(0.12) { false }
+        t.check(probes == p1, "nach dem Ausblenden wird nicht mehr nachgelesen", "\(probes - p1) weitere")
+
+        // Enter, während die Karte steht
+        verdict = .intact
+        _ = paste()
+        front = 99   // andere App vorne → Enter zählt nicht
+        flow.returnPressed()
+        spin(0.3) { false }
+        t.check(isOffer(pres.phase), "Enter in einer ANDEREN App → Karte bleibt")
+        front = 4242
+        flow.returnPressed()
+        spin(0.6) { false }
+        t.check(isOffer(pres.phase), "Enter, Box aber unverändert (z. B. Zeilenumbruch im Editor) → Karte bleibt")
+        verdict = .unreadable("Test")
+        flow.returnPressed()
+        spin(1) { !pres.isShowing }
+        t.check(!pres.isShowing && flow.offer == nil, "Enter in der Ziel-App + nicht lesbar → zählt als abgeschickt, Karte weg")
+        verdict = .sent
+        _ = paste()
+        flow.returnPressed()
+        spin(1) { !pres.isShowing }
+        t.check(!pres.isShowing, "Enter in der Ziel-App + Box leer → Karte weg")
+
+        // Neues Diktat → alter Vorschlag weg (nie zwei übereinander)
+        verdict = .intact
+        _ = paste()
+        let fadedBefore = pres.faded
+        flow.dictationStarted()
+        t.check(!pres.isShowing && flow.offer == nil && pres.faded == fadedBefore + 1, "neues Diktat → offener Vorschlag leise weg")
+        // Zwei Diktate schnell hintereinander: der neue Vorschlag ersetzt den alten
+        _ = paste()
+        let firstPasted = flow.offer?.pasted
+        _ = paste(APTestSet.longDE2)
+        t.check(flow.offer?.pasted !== firstPasted && flow.offer?.text == APTestSet.longDE2 && isOffer(pres.phase), "zweiter Vorschlag ersetzt den ersten (eigene Stelle)")
+
+        // Bauen, währenddessen abgeschickt → fertige Karte nur „Kopieren“ + „Als neue Nachricht einfügen“
+        buildMs = 400_000_000
+        pres.onAction(.build)
+        t.check(flow.isBuilding && paste() != nil && flow.offer == nil, "während des Bauens: kein neuer Vorschlag (Bau läuft weiter)")
+        verdict = .sent
+        spin(3) { !flow.isBuilding }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        if case .done(_, let sent)? = pres.last { t.check(sent, "Original während des Bauens abgeschickt → fertige Karte „Als neue Nachricht einfügen“") }
+        else { t.check(false, "fertige Karte", "\(String(describing: pres.last))") }
+        replaced = []; inserts = []; toasts = []
+        pres.onAction(.insert)
+        t.check(replaced.isEmpty && inserts == [APCLI.samplePromptDE] && toasts.isEmpty, "… „Einfügen“ fügt nur ein, löscht nichts, kein Hinweis")
+
+        // Bauen, Original bleibt → „Einfügen“ ersetzt; Ergebnis „schon abgeschickt“ → leiser Hinweis
+        verdict = .intact
+        buildMs = 30_000_000
+        pres.close()
+        _ = paste()
+        pres.onAction(.build)
+        spin(3) { !flow.isBuilding }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        if case .done(_, let sent)? = pres.last { t.check(!sent, "Original noch da → normale fertige Karte (Einfügen = Ersetzen)") } else { t.check(false, "fertige Karte 2") }
+        replaced = []; inserts = []; toasts = []
+        outcome = .insertNew(hint: APReplaceOutcome.hintSent, why: "abgeschickt")
+        pres.onAction(.insert)
+        t.check(replaced.count == 1 && toasts == [APReplaceOutcome.hintSent], "Ersetzen fand das Original abgeschickt → Prompt neu + „Original war schon abgeschickt – Prompt neu eingefügt“", "\(toasts)")
+        // Doppelklick auf „Einfügen“ ersetzt nie zweimal
+        let flow2Replaced = replaced.count
+        var later: ((APReplaceOutcome, Bool) -> Void)?
+        flow.actions.replace = { prompt, _, done in replaced.append(prompt); later = done }
+        pres.close(); _ = paste(); pres.onAction(.build); spin(3) { !flow.isBuilding }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        pres.onAction(.insert); pres.onAction(.insert)
+        t.check(replaced.count == flow2Replaced + 1, "Doppelklick auf „Einfügen“ → nur EIN Ersetzen", "\(replaced.count - flow2Replaced)")
+        later?(.cleared, true)
+        // Federzeit des Vorschlags
+        t.check(APCard.offerRevealMs < 200 && APCard.offerRevealMs < Int(APCard.springReach(response: 0.5, damping: 0.78, target: 0.8) * 1000),
+                "Vorschlag federt schneller auf (lesbar nach \(APCard.offerRevealMs) ms statt \(Int(APCard.springReach(response: 0.5, damping: 0.78, target: 0.8) * 1000)) ms)")
+        flow.dictationStarted()
+    }
+}
+
+// MARK: - Tempo: Einfügen → Vorschlags-Karte (offscreen gemessen)
+
+extension APCLI {
+    static func latency() -> Int32 {
+        _ = NSApplication.shared
+        func ms(_ block: () -> Void) -> Double { let t0 = Date(); block(); return Date().timeIntervalSince(t0) * 1000 }
+        let texts = [APTestSet.longDE1, APTestSet.longDE2, APTestSet.longDE3, APTestSet.longDE4]
+        let long = Array(repeating: APTestSet.longDE1, count: 5).joined(separator: " ")
+        var det: [Double] = []
+        for _ in 0..<5 { for s in texts + [long] { det.append(ms { _ = APDetector.detect(text: s, duration: 40, bundleID: APTestSet.vsc, title: "x") }) } }
+        det.sort()
+        // Karte aufbauen wie APCard.show (Modell, Illustration, SwiftUI-Host, Layout, erstes Bild) – unsichtbar
+        func build() -> Double {
+            ms {
+                let d = APDetector.detect(text: APTestSet.longDE1, duration: 40, bundleID: APTestSet.vsc)
+                let pill = NSRect(x: 560, y: 30, width: 66, height: 24), scr = NSRect(x: 0, y: 0, width: 1512, height: 949)
+                let m = APCardModel(phase: .offer(d), geo: APGeo.make(pill: pill, visible: scr, frame: scr))
+                m.ensureIllustration(.offer(d))
+                let host = NSHostingView(rootView: APCardStage(model: m))
+                host.frame = NSRect(origin: .zero, size: m.geo.windowFrame.size)
+                host.layoutSubtreeIfNeeded()
+                if let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) { host.cacheDisplay(in: host.bounds, to: rep) }
+            }
+        }
+        let cold = build()
+        var warm: [Double] = []
+        for _ in 0..<8 { warm.append(build()) }
+        warm.sort()
+        let oldReveal = APCard.springReach(response: APCard.cardSpring.response, damping: APCard.cardSpring.damping, target: 0.8) * 1000
+        let oldClick = APCard.springReach(response: APCard.cardSpring.response, damping: APCard.cardSpring.damping, target: 0.9) * 1000
+        let newReveal = Double(APCard.offerRevealMs), newClick = Double(APCard.offerClickableMs)
+        let detMed = det[det.count / 2], detMax = det.last ?? 0, warmMed = warm[warm.count / 2]
+        print(String(format: "Erkennung (APDetector, %d Läufe): Median %.1f ms, max %.1f ms (bis ~600 Wörter)", det.count, detMed, detMax))
+        print(String(format: "Karte aufbauen offscreen: kalt %.0f ms, warm Median %.1f ms", cold, warmMed))
+        print(String(format: "Einblenden bis lesbar (Feder): vorher %.0f ms (klickbar %.0f) · jetzt %.0f ms (klickbar %.0f)", oldReveal, oldClick, newReveal, newClick))
+        let before = 700 + detMed + cold + oldReveal
+        let after = warmMed + newReveal
+        print(String(format: "VORHER  Einfügen → lesbar ≈ 700 (feste Pause) + Ziel/Markierung lesen (AX, Main) + %.0f Erkennung + %.0f Karte (kalt) + %.0f Einblenden ≈ %.0f ms + AX", detMed, cold, oldReveal, before))
+        print(String(format: "NACHHER Einfügen → lesbar ≈ 0 Pause + 0 Erkennung (vorab im Hintergrund) + %.0f Karte (vorgeladen) + %.0f Einblenden ≈ %.0f ms", warmMed, newReveal, after))
+        return after < 1000 ? 0 : 1
     }
 }
 

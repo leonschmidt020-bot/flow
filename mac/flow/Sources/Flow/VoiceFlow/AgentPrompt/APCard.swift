@@ -5,6 +5,8 @@ import SwiftUI
 //
 // Zustände: Vorschlag („Daraus einen Agent-Prompt machen?“) → wird gebaut (Live-Text) → fertig (Vorschau, Kopieren/
 // Einfügen/Ansehen, Original) · oder abgebrochen/fehlgeschlagen (Original einfügen/kopieren).
+// Fertig, aber das Original wurde inzwischen abgeschickt (`sent`): nur „Kopieren“ + „Als neue Nachricht einfügen“.
+// Der Vorschlag federt schneller auf (~130 ms bis lesbar) und geht beim Abschicken des Originals leise weg (fadeOut).
 // Zustandswechsel ändern nur die Höhe (federnd) – die Karte bleibt dieselbe. Maus drauf = bleibt offen und die Vorschau
 // wird größer; das Mausrad scrollt in der Vorschau. Esc/✕ schließen (beim Bauen: abbrechen). Nichts geht verloren –
 // jeder fertige Prompt steht im Verlauf (Hub › Scratchpad › Agent-Prompts), das Original in ClipVault.
@@ -14,7 +16,8 @@ enum APStopKind: Equatable { case cancelled, failed }
 enum APCardPhase: Equatable {
     case offer(APDetection)
     case building(partial: String, words: Int, started: Date)
-    case done(APRecord)
+    /// `sent`: Original ist schon abgeschickt – nichts mehr zu ersetzen
+    case done(APRecord, sent: Bool = false)
     case stopped(APStopKind, reason: String, original: String)
 
     var key: String {
@@ -39,6 +42,10 @@ protocol APPresenter: AnyObject {
     var onAction: (APCardAction) -> Void { get set }
     /// Kurz „Kopiert ✓“ / „Eingefügt ✓“ anzeigen
     func flash(_ what: APCardFlash)
+    /// Was gerade sichtbar ist (nil = keine Karte)
+    var phase: APCardPhase? { get }
+    /// Leise ausblenden (kurzes Verblassen statt Zurückschrumpfen in die Pille)
+    func fadeOut()
 }
 
 enum APCardFlash { case copied, copiedOriginal, inserted }
@@ -149,6 +156,8 @@ final class APCardModel: ObservableObject {
     @Published var copied = false
     @Published var copiedOriginal = false
     @Published var inserted = false
+    /// Deckkraft der ganzen Karte (leises Ausblenden)
+    @Published var opacity: Double = 1
     /// Illustration je Zustand (Variante einmal gewählt, dann fest)
     @Published var illustrations: [String: String] = [:]
     var act: (APCardAction) -> Void = { _ in }
@@ -222,7 +231,33 @@ final class APCard: APPresenter {
     private var closing = false
 
     var isShowing: Bool { model != nil && !closing }
-    var phase: APCardPhase? { model?.phase }
+    var phase: APCardPhase? { isShowing ? model?.phase : nil }
+
+    // Federn: Vorschlag schneller (soll in < 1 s nach dem Einfügen klickbar sein), sonst wie die VFNotify-Karten
+    static let offerSpring = (response: 0.34, damping: 0.8)
+    static let cardSpring = (response: 0.5, damping: 0.78)
+
+    /// Zeitpunkt, an dem eine Feder (SwiftUI `.spring(response:dampingFraction:)`, Masse 1) `target` erreicht – Sekunden
+    static func springReach(response: Double, damping: Double, target: Double) -> Double {
+        let w0 = 2 * Double.pi / response, z = damping
+        var t = 0.0
+        while t < 2 {
+            let x: Double
+            if z < 1 {
+                let wd = w0 * (1 - z * z).squareRoot()
+                x = 1 - exp(-z * w0 * t) * (cos(wd * t) + z * w0 / wd * sin(wd * t))
+            } else {
+                x = 1 - exp(-w0 * t) * (1 + w0 * t)
+            }
+            if x >= target { return t }
+            t += 0.001
+        }
+        return t
+    }
+    /// Vorschlag lesbar (Inhalt ≥ 80 % deckend: APMorph blendet zwischen 0,45 und 0,92 ein → Fortschritt ≈ 0,8)
+    static let offerRevealMs = Int(springReach(response: offerSpring.response, damping: offerSpring.damping, target: 0.8) * 1000)
+    /// Klicks erst ab Fortschritt 0,9 (Hit-Test)
+    static let offerClickableMs = Int(springReach(response: offerSpring.response, damping: offerSpring.damping, target: 0.9) * 1000)
 
     static func timeout(_ p: APCardPhase) -> TimeInterval? {
         switch p {
@@ -250,7 +285,8 @@ final class APCard: APPresenter {
                 if case .done = phase { m.copied = true; m.showOriginal = false }
                 withAnimation(.spring(response: 0.42, dampingFraction: 0.8)) { m.phase = phase }
             }
-            if !sameKind { restartTimer() }
+            // Zeitlimit neu: bei jedem Zustandswechsel – und bei einem NEUEN Vorschlag (sonst lief das Limit des alten weiter)
+            if !sameKind || phase.key == "offer" { restartTimer() }
             return
         }
         if closing { finishClose() }
@@ -271,11 +307,51 @@ final class APCard: APPresenter {
         p.setFrame(geo.windowFrame, display: false)
         p.ignoresMouseEvents = true
         p.orderFrontRegardless()
+        let spring = phase.key == "offer" ? APCard.offerSpring : APCard.cardSpring
         DispatchQueue.main.async {
-            withAnimation(.spring(response: 0.5, dampingFraction: 0.78)) { m.progress = 1 }
+            withAnimation(.spring(response: spring.response, dampingFraction: spring.damping)) { m.progress = 1 }
         }
         startHitTesting()
         restartTimer()
+    }
+
+    /// Leise weg (Original abgeschickt / neues Diktat): 0,18 s verblassen, kein Zurückschrumpfen, kein Toast
+    func fadeOut() {
+        guard Thread.isMainThread else { DispatchQueue.main.async { self.fadeOut() }; return }
+        guard let m = model, !closing else { return }
+        closing = true
+        dismissTimer?.invalidate(); dismissTimer = nil
+        hitTimer?.invalidate(); hitTimer = nil
+        panel?.ignoresMouseEvents = true
+        withAnimation(.easeOut(duration: 0.18)) { m.opacity = 0 }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            guard let self, self.closing, self.model === m else { return }
+            self.finishClose()
+        }
+    }
+
+    /// Einmal beim Start: SwiftUI-Typen, Schriften und Illustrationen vorladen (unsichtbar, nichts auf dem Bildschirm),
+    /// damit die erste Vorschlags-Karte nicht den Kaltstart bezahlt.
+    func prewarm() {
+        guard Thread.isMainThread else { DispatchQueue.main.async { self.prewarm() }; return }
+        let t0 = Date()
+        for name in ["illu_prompt_vorschlag", "illu_prompt_baut", "illu_prompt_fertig"] {
+            if let img = APCardStyle.image(name) { _ = img.cgImage(forProposedRect: nil, context: nil, hints: nil) }
+        }
+        let det = APDetector.detect(text: APTestSet.longDE1, duration: 40, bundleID: APTestSet.vsc)
+        let pill = NSRect(x: 560, y: 30, width: 66, height: 24), scr = NSRect(x: 0, y: 0, width: 1512, height: 949)
+        let m = APCardModel(phase: .offer(det), geo: APGeo.make(pill: pill, visible: scr, frame: scr))
+        m.progress = 1
+        let host = NSHostingView(rootView: APCardStage(model: m))
+        host.frame = NSRect(origin: .zero, size: m.geo.windowFrame.size)
+        // Fenster wird nie gezeigt (kein orderFront) – nur damit SwiftUI wirklich einmal zeichnet
+        let win = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: true)
+        win.isReleasedWhenClosed = false
+        win.contentView = host
+        host.layoutSubtreeIfNeeded()
+        if let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) { host.cacheDisplay(in: host.bounds, to: rep) }
+        win.contentView = nil
+        log("Agent-Prompt-Karte vorgeladen (\(Int(Date().timeIntervalSince(t0) * 1000)) ms)")
     }
 
     func flash(_ what: APCardFlash) {
@@ -313,6 +389,7 @@ final class APCard: APPresenter {
     }
 
     private func finishClose() {
+        model?.opacity = 1
         panel?.orderOut(nil)
         panel?.contentView = nil
         model = nil
@@ -364,13 +441,13 @@ final class APCard: APPresenter {
 
     @discardableResult
     static func renderPNG(_ phase: APCardPhase, to url: URL, progress: CGFloat = 1, hovering: Bool = false, showOriginal: Bool = false,
-                          copied: Bool = true, pill: NSRect = NSRect(x: 560, y: 30, width: 66, height: 24),
+                          copied: Bool = true, opacity: Double = 1, pill: NSRect = NSRect(x: 560, y: 30, width: 66, height: 24),
                           screen: NSRect = NSRect(x: 0, y: 0, width: 1512, height: 949),
                           background: NSColor = NSColor(white: 0.88, alpha: 1), illustration: String? = nil) -> Bool {
         _ = NSApplication.shared
         let geo = APGeo.make(pill: pill, visible: screen, frame: screen)
         let m = APCardModel(phase: phase, geo: geo)
-        m.progress = progress; m.hovering = hovering; m.showOriginal = showOriginal; m.copied = copied
+        m.progress = progress; m.hovering = hovering; m.showOriginal = showOriginal; m.copied = copied; m.opacity = opacity
         if let illustration { m.illustrations[phase.key] = illustration }
         let root = ZStack(alignment: .topLeading) {
             Color(nsColor: background)
@@ -403,6 +480,7 @@ struct APCardStage: View {
             .frame(width: model.geo.windowFrame.width, height: model.geo.windowFrame.height)
             .modifier(APMorph(progress: model.progress, height: model.height, geo: model.geo,
                               content: AnyView(APCardContent(model: model))))
+            .opacity(model.opacity)
             .environment(\.colorScheme, .dark)
     }
 }
@@ -512,7 +590,7 @@ struct APCardContent: View {
                             .font(.system(size: 11, weight: .medium).monospacedDigit()).foregroundStyle(.white.opacity(0.42))
                     }
                     .padding(.leading, 2)
-                case .done(let r):
+                case .done(let r, _):
                     chip(r.byRules ? "Prompt · ohne KI" : "Agent-Prompt", r.byRules ? "list.bullet.indent" : "sparkles", r.byRules ? APCardStyle.amber : APCardStyle.lilac)
                     Spacer(minLength: 4)
                     APSegment(left: "Prompt", right: "Original", rightOn: model.showOriginal) { on in
@@ -528,7 +606,7 @@ struct APCardContent: View {
                 .foregroundStyle(.white)
                 .lineLimit(1).minimumScaleFactor(0.85)
                 .padding(.top, 8)
-            if case .done(let r) = p, !model.showOriginal {
+            if case .done(let r, _) = p, !model.showOriginal {
                 // Kurzzeile: Ziel (eine Zeile) + Umfang
                 let g = r.gist
                 Text(g.goal)
@@ -575,7 +653,7 @@ struct APCardContent: View {
         case .building(let partial, let words, _):
             if !APCardStyle.claudeAvailable() { return "Flow ordnet deine \(words) Wörter nach Regeln …" }
             return partial.isEmpty ? "Claude ordnet deine \(words) Wörter …" : "Claude schreibt – \(APText.words(partial)) von ~\(max(words, APText.words(partial))) Wörtern"
-        case .done(let r):
+        case .done(let r, _):
             if model.showOriginal { return "Dein Original-Diktat · \(APText.words(r.original)) Wörter" }
             return r.gist.line
         case .stopped(_, let why, _):
@@ -605,7 +683,7 @@ struct APCardContent: View {
             } overlay: {
                 VStack { Spacer(); APSweepBar().frame(height: 2).padding(.horizontal, 1) }
             } corner: { EmptyView() }
-        case .done(let r):
+        case .done(let r, _):
             preview {
                 ScrollView(.vertical, showsIndicators: model.hovering) {
                     APPromptText(text: model.showOriginal ? r.original : r.prompt, original: model.showOriginal)
@@ -661,18 +739,28 @@ struct APCardContent: View {
                 Spacer(minLength: 0)
                 Text("Original liegt schon in der Zwischenablage")
                     .font(.system(size: 11)).foregroundStyle(.white.opacity(0.4)).lineLimit(1)
-            case .done(let r):
+            case .done(let r, let sent):
                 if model.showOriginal {
                     APButton(title: model.copiedOriginal ? "Kopiert" : "Original kopieren", symbol: model.copiedOriginal ? "checkmark" : "doc.on.doc", kind: .primary) { model.act(.copyOriginal) }
                     APButton(title: "Original einfügen", symbol: "arrow.down.to.line", kind: .secondary) { model.act(.insertOriginal) }
+                } else if sent {
+                    // Original ist schon abgeschickt – nichts zu ersetzen
+                    APButton(title: model.copied ? "Kopiert" : "Kopieren", symbol: model.copied ? "checkmark" : "doc.on.doc", kind: .primary, done: model.copied) { model.act(.copy) }
+                    APButton(title: "Als neue Nachricht einfügen", symbol: "arrow.down.to.line", kind: .secondary) { model.act(.insert) }
                 } else {
                     APButton(title: model.copied ? "Kopiert" : "Kopieren", symbol: model.copied ? "checkmark" : "doc.on.doc", kind: .primary, done: model.copied) { model.act(.copy) }
                     APButton(title: model.inserted ? "Eingefügt" : "Einfügen", symbol: "arrow.down.to.line", kind: .secondary) { model.act(.insert) }
+                        .help(r.trigger == "vorschlag" ? "Ersetzt dein Diktat im Eingabefeld durch den Prompt" : "Prompt einfügen")
                     APButton(title: "Ansehen", kind: .ghost) { model.act(.open) }
                 }
                 Spacer(minLength: 0)
+                if sent && !model.showOriginal {
+                    Text("Original abgeschickt")
+                        .font(.system(size: 10.5, weight: .medium)).foregroundStyle(.white.opacity(0.38)).lineLimit(1)
+                } else {
                 Text(r.byRules ? APCardStyle.rulesLabel(r.note) : "\(APCardStyle.sourceLabel(r.source)) · \(String(format: "%.1f", Double(r.buildMs) / 1000).replacingOccurrences(of: ".", with: ",")) s")
                     .font(.system(size: 10.5, weight: .medium)).foregroundStyle(.white.opacity(0.38)).lineLimit(1)
+                }
             case .stopped:
                 APButton(title: "Original einfügen", symbol: "arrow.down.to.line", kind: .primary) { model.act(.insertOriginal) }
                 APButton(title: model.copiedOriginal ? "Kopiert" : "Original kopieren", symbol: model.copiedOriginal ? "checkmark" : "doc.on.doc", kind: .secondary) { model.act(.copyOriginal) }

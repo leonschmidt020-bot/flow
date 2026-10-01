@@ -8,6 +8,9 @@ final class HotkeyMonitor {
     enum Event { case pressStart, holdEnd, tapCancelled, comboCancelled, doubleTap, singleTapWhileHandsFree, escape, commandStart, commandEnd }
 
     var onEvent: ((Event) -> Void)?
+    /// Enter/Return ohne Umschalt/Wahl/⌘/⌃ (eigene Tasten ausgenommen) – der Agent-Prompt-Vorschlag erkennt daran
+    /// „Original abgeschickt“. Nur das Ereignis, nie welche Taste sonst gedrückt wurde.
+    static var onReturn: (() -> Void)?
     /// Wird vom Controller gesetzt: befindet sich die App gerade im Freihand-Modus?
     var handsFreeActive: () -> Bool = { false }
 
@@ -74,6 +77,10 @@ final class HotkeyMonitor {
             if event.getIntegerValueField(.eventSourceUserData) == HotkeyMonitor.syntheticTag { return }
             let code = event.getIntegerValueField(.keyboardEventKeycode)
             if code == Int64(kVK_Escape) { onEvent?(.escape); return }
+            if code == Int64(kVK_Return) || code == Int64(kVK_ANSI_KeypadEnter),
+               event.flags.intersection([.maskShift, .maskAlternate, .maskCommand, .maskControl]).isEmpty, !isDown {
+                HotkeyMonitor.onReturn?()
+            }
             if isDown && !comboUsed {
                 comboUsed = true
                 onEvent?(.comboCancelled)

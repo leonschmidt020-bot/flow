@@ -91,6 +91,8 @@ final class SharedInboxBadge {
     private var blockedLogged = false
     /// Nach dem Schließen erst wieder per Überfahren öffnen, wenn die Maus die Pille verlassen hat
     private var rearmed = true
+    private var whyLogged = false
+    private var hoverBlockedSince: Date?
     private var openedAt: Date?
     private var closing = false
     private var dwell: [String: TimeInterval] = [:]
@@ -279,8 +281,20 @@ final class SharedInboxBadge {
             }
             return
         }
-        if !onPill { rearmed = true }
-        if shouldShowRing && onPill && rearmed && PillRing.shared.current == .shared {
+        if !onPill { rearmed = true; whyLogged = false }
+        // 04.10.2026: grüner Rahmen sichtbar, Überfahren öffnete nichts – kein Protokoll. Jetzt: nur noch „kein Diktat/
+        // Meeting“ nötig (nicht mehr Pille exakt im Ruhe-Modus – die vergrößerte Pille beim Überfahren zählte zeitweise
+        // nicht als Ruhe), und wenn die Maus 1 s auf der Pille liegt ohne zu öffnen, steht der Grund im Protokoll.
+        let canOpen = hasNew && !SmartFlow.shared.isBusy()
+        if onPill, !(canOpen && rearmed && PillRing.shared.current == .shared) {
+            if hoverBlockedSince == nil { hoverBlockedSince = now }
+            if !whyLogged, now.timeIntervalSince(hoverBlockedSince!) > 1 {
+                whyLogged = true
+                log("Geteilt: Überfahren öffnet nicht – neu=\(hasNew) beschäftigt=\(SmartFlow.shared.isBusy()) Pille=\(SmartFlow.shared.pillIsIdle() ? "Ruhe" : "aktiv") bereit=\(rearmed) Rahmen=\(String(describing: PillRing.shared.current))")
+                rearmed = true   // nie dauerhaft gesperrt bleiben
+            }
+        } else { hoverBlockedSince = nil }
+        if canOpen && onPill && rearmed && PillRing.shared.current == .shared {
             // Eigene Ankündigungskarte darf das Öffnen nicht blockieren – sie macht Platz für die Liste
             if VFNotify.shared.currentID == "geteilt_neu" { VFNotify.shared.dismiss(id: "geteilt_neu") }
             if hoverSince == nil { hoverSince = now; blockedLogged = false }

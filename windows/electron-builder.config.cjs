@@ -32,7 +32,7 @@ module.exports = {
       '!**/node_modules/uiohook-napi/prebuilds/{darwin,linux}-*/**',
       '!**/node_modules/uiohook-napi/prebuilds/win32-arm64/**',
       '!**/node_modules/uiohook-napi/{src,libuiohook}/**',
-      '!**/node_modules/koffi/{src,vendor,doc}/**',
+      '!**/node_modules/koffi/{vendor,doc}/**',   // src/ NICHT ausschließen: koffi 3 lädt ./src/koffi/index.cjs (05.10.: „Cannot find module“ beim Freund)
     ],
     icon: 'build/icon.ico',
     artifactName: 'Flow-Setup-${version}.${ext}',

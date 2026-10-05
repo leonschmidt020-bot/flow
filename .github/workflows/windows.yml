@@ -85,6 +85,13 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npx electron-builder --config electron-builder.config.cjs --win --x64 --publish always
 
+      - name: Check packaged native modules (koffi, uiohook, sherpa)
+        shell: pwsh
+        run: |
+          $env:ELECTRON_RUN_AS_NODE = "1"
+          & "release/win-unpacked/Flow.exe" scripts/check-packaged.cjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:

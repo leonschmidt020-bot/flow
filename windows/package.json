@@ -1,7 +1,7 @@
 {
   "name": "flow",
   "productName": "Flow",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Flow – free, open-source, 100 % local voice dictation",
   "license": "MIT",
   "author": "Flow contributors",

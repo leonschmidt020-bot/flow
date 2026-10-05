@@ -212,6 +212,9 @@ struct CVItemRow: View {
     let selected: Bool
     var showCollection = true
     var fresh = false
+    var picking = false            // Mehrfachauswahl aktiv -> Kreis links in jeder Zeile
+    var picked = false
+    var onPick: () -> Void = {}
     let onSelect: () -> Void
     @ObservedObject var cv = ClipVaultClient.shared
     @State private var hover = false
@@ -219,9 +222,23 @@ struct CVItemRow: View {
     var body: some View {
         let secret = cv.isSecret(item)
         HStack(alignment: .center, spacing: 0) {
-            Text(HubFormat.time(item.date))
-                .font(.system(size: 13.5)).foregroundStyle(VF.muted).monospacedDigit()
-                .frame(width: 62, alignment: .leading)
+            if picking {
+                Button(action: onPick) { CVPickCircle(checked: picked) }
+                    .buttonStyle(.plain).padding(.trailing, 14)
+                    .help(picked ? "Abwählen" : "Auswählen")
+            }
+            // ohne Auswahl: beim Hovern steht an Stelle der Uhrzeit der Kreis (entdeckbar, ohne die Zeile zu verschieben)
+            ZStack(alignment: .leading) {
+                Text(HubFormat.time(item.date))
+                    .font(.system(size: 13.5)).foregroundStyle(VF.muted).monospacedDigit()
+                    .opacity(!picking && hover ? 0 : 1)
+                if !picking && hover {
+                    Button(action: onPick) { CVPickCircle(checked: false) }
+                        .buttonStyle(.plain)
+                        .help("Auswählen – mehrere Einträge zusammen kopieren (auch ⌘-Klick, ⇧-Klick, ⌘A)")
+                }
+            }
+            .frame(width: 62, alignment: .leading)
             CVItemVisual(item: item)
                 .padding(.trailing, 14)
             VStack(alignment: .leading, spacing: 3) {
@@ -269,7 +286,7 @@ struct CVItemRow: View {
 
     private var background: Color {
         if fresh { return VF.teal4 }
-        if selected { return CVPalette.rowSelected }
+        if picked || selected { return CVPalette.rowSelected }
         return hover ? VF.panel : VF.card
     }
 }
@@ -280,6 +297,12 @@ struct CVItemMenu: View {
     @ObservedObject var cv = ClipVaultClient.shared
 
     var body: some View {
+        let hub = CVHubState.shared
+        Button(hub.picks.contains(item.id) ? "Abwählen" : (hub.picks.isActive ? "Zur Auswahl hinzufügen" : "Auswählen (mehrere kopieren)")) { hub.picks.toggle(item.id) }
+        if hub.picks.isActive {
+            Button("Alle \(hub.picks.count) kopieren") { cv.copyMany(hub.picks.ids.compactMap { cv.item($0) }) }
+        }
+        Divider()
         Button("Kopieren") { cv.copy(item) }
         Button(item.pinned ? "Lösen" : "Anheften") { cv.setPinned(item, !item.pinned) }
         Menu("In Bereich legen") {

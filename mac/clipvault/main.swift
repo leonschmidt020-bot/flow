@@ -229,6 +229,23 @@ if cliArgs.count >= 3 && cliArgs[1] == "panel-render" {
                 }
             }
         }
+    case "auswahl", "auswahl-gemischt", "auswahl-hover":
+        // Mehrfachauswahl (nur im Speicher): Bilder-Filter mit 3 gewählten Bildern · gemischt im Verlauf · Hover-Kreis
+        if scene == "auswahl" { pc.typeFilter = .images; pc.buildFilters() }
+        pc.reload()
+        let ids = pc.visibleIds()
+        if scene == "auswahl" {
+            for id in ids.prefix(3) { pc.toggleSelection(id) }
+        } else if scene == "auswahl-gemischt" {
+            let img = ids.filter { Store.shared.item($0)?.kind == .image }.prefix(2)
+            let txt = ids.filter { Store.shared.item($0)?.kind == .text }.prefix(1)
+            for id in img + txt { pc.toggleSelection(id) }
+        }
+        if let f = pc.firstItemRow() {
+            let r = scene == "auswahl" ? min(f + 3, pc.display.count - 1) : f   // Hover auf einer NICHT gewählten Zeile
+            pc.selectRow(r); pc.table.layoutSubtreeIfNeeded()
+            (pc.table.view(atColumn: 0, row: r, makeIfNecessary: false) as? HoverRowView)?.onHover?()
+        }
     default: pick { $0.kind == .text && soleURL($0.text) != nil }
     }
     let v = pc.effect
@@ -256,6 +273,31 @@ if cliArgs.count >= 4 && cliArgs[1] == "pasteboard-test" {
     do { try FileManager.default.copyItem(at: u, to: dest) } catch { print("FEHLER: \(error.localizedDescription)"); exit(1) }
     print("eingefuegt: \(dest.path)"); exit(0)
 }
+// Test „Alle kopieren": die ersten n Bilder (oder Bilder + Text) auf eine EIGENE Zwischenablage legen und
+// wie Finder/Claude Code zurücklesen. Nur mit CLIPVAULT_HOME — nie gegen den echten Verlauf.
+//   CLIPVAULT_HOME=/tmp/cv-test clipvault multicopy-test 3 [bilder|gemischt]
+if cliArgs.count >= 3 && cliArgs[1] == "multicopy-test" {
+    guard CV_HOME_OVERRIDE != nil else { print("Nur mit CLIPVAULT_HOME=<Testordner>."); exit(2) }
+    CV_READ_ONLY = true; CV_HEADLESS = true
+    let n = Int(cliArgs[2]) ?? 3, mixed = cliArgs.count >= 4 && cliArgs[3] == "gemischt"
+    var ids = Store.shared.items.filter { $0.kind == .image }.prefix(n).map(\.id)
+    if mixed { ids += Store.shared.items.filter { $0.kind == .text }.prefix(1).map(\.id) }
+    let plan = MultiCopy.plan(cvSelectionEntries(ids))
+    let pb = NSPasteboard(name: NSPasteboard.Name("app.flowdictation.clipvault.multitest." + UUID().uuidString))
+    defer { pb.releaseGlobally() }
+    guard MultiCopy.write(plan, to: pb) else { print("FEHLER: nichts geschrieben"); exit(1) }
+    let items = pb.pasteboardItems ?? []
+    print("Items: \(items.count)")
+    for (i, it) in items.enumerated() {
+        let t = it.types.map(\.rawValue).filter { ["public.file-url", "public.png", "public.utf8-plain-text"].contains($0) }
+        print("  #\(i + 1): " + t.joined(separator: ", ") + (it.data(forType: .png).map { "  (PNG \($0.count) B)" } ?? ""))
+    }
+    let urls = pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
+    print("Datei-URLs (wie Finder): \(urls.count), alle vorhanden: \(urls.allSatisfy { FileManager.default.fileExists(atPath: $0.path) })")
+    print("Klartext (wie Terminal/Claude Code):\n" + (pb.string(forType: .string) ?? "-"))
+    print("Hinweis: " + MultiCopy.toastText(plan))
+    exit(0)
+}
 // Live-Test der Animation: clipvault test-phonedrop
 if cliArgs.count >= 2 && cliArgs[1] == "test-phonedrop" {
     let appT = NSApplication.shared; appT.setActivationPolicy(.accessory)
@@ -265,6 +307,8 @@ if cliArgs.count >= 2 && cliArgs[1] == "test-phonedrop" {
 }
 // Selbsttest des Aktions-Leisten-Automaten (reine Logik, fasst nichts an)
 if cliArgs.count >= 2 && cliArgs[1] == "actionbar-test" { runActionBarTest() }
+// Selbsttest der Mehrfachauswahl + Zwischenablage-Inhalt (eigene Test-Zwischenablage, Testordner in /tmp)
+if cliArgs.count >= 2 && cliArgs[1] == "multiselect-test" { runMultiSelectTest() }
 // Selbsttest: derselbe Screenshot ueber Datei + Zwischenablage -> ein Eintrag (nur mit CLIPVAULT_HOME)
 if cliArgs.count >= 2 && cliArgs[1] == "doppelt-test" { runDoppeltTest(cliArgs) }
 // Geteilter Tresor: Kopplung + Sync (sync.swift)
@@ -291,6 +335,7 @@ if cliArgs.count >= 2 && !cliArgs[1].hasPrefix("-") {
                                  · leiste-ruhe · leiste-kompakt · leiste-kompakt-pin · leiste-hinweis
                                  · leiste-halten · leiste-aufgehen · leiste-offen · leiste-ziehen
                                  · leiste-zu   (Aktions-Leiste einer Zeile)
+                                 · auswahl · auswahl-gemischt · auswahl-hover   (Mehrfachauswahl)
       send <aktion> [feld=wert …]
                           Befehl an die laufende App (siehe PROTOCOL.md), z. B. send ping
       listen [sekunden]   Aenderungs-/Antwort-Meldungen mitlesen
@@ -303,6 +348,10 @@ if cliArgs.count >= 2 && !cliArgs[1].hasPrefix("-") {
                           Sync-Server (Cloudflare Worker) eintragen / Zustand zeigen
       sync-agent          nur Sync ohne Oberflaeche (Test-/Zweitgeraet, mit CLIPVAULT_HOME)
       actionbar-test      Selbsttest der Aktions-Leiste (Griff, Halten, Ziehen-Loslassen, Einfahren)
+      multiselect-test    Selbsttest Mehrfachauswahl (⌘/⇧-Klick, ⌘A) + Inhalt für „Alle kopieren"
+      multicopy-test <n> [bilder|gemischt]
+                          die ersten n Bilder (bzw. gemischt) wie „Alle kopieren" auf eine EIGENE
+                          Zwischenablage legen und zurücklesen (nur mit CLIPVAULT_HOME)
       doppelt-test [--ohne-abgleich]
                           Selbsttest Screenshot-Doppel (nur mit CLIPVAULT_HOME=<Testordner>)
       linkprev-test <url> <png>

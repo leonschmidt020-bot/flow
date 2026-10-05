@@ -69,6 +69,8 @@ final class CVHubState: ObservableObject {
     @Published var openCollection: String?
     /// Ausgewählter Eintrag (Vorschau rechts)
     @Published var selectedID: String?
+    /// Mehrfachauswahl (⌘-/⇧-Klick, ⌘A) – gilt für die offene Seite, beim Seitenwechsel leer (CVMultiSelect.swift)
+    @Published var picks = CVPickSet()
 
     private init() {
         mode = CVAppMode(rawValue: UserDefaults.standard.string(forKey: Self.modeKey) ?? "") ?? .flow

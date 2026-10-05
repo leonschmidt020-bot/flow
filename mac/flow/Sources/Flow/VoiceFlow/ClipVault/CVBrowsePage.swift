@@ -20,7 +20,7 @@ struct CVRootPage: View {
             CVImageViewerOverlay().zIndex(10)   // Bild groß ansehen (Leuchtkasten)
         }
         .onAppear { cv.start(); CVShared.shared.start() }
-        .onChange(of: pageID) { _, _ in CVImageViewer.shared.close() }
+        .onChange(of: pageID) { _, _ in CVImageViewer.shared.close(); state.picks.clear() }
     }
 
     private var pageID: String { state.section.rawValue + (state.openCollection ?? "") }
@@ -129,7 +129,7 @@ struct CVBrowsePage: View {
         }
         .sheet(isPresented: $adding) { CVAddTextSheet(isPresented: $adding, collection: collectionID) }
         .onAppear(perform: ensureSelection)
-        .onChange(of: cv.items) { _, _ in ensureSelection() }
+        .onChange(of: cv.items) { _, _ in ensureSelection(); state.picks.prune(keep: Set(cv.items.map(\.id))) }
     }
 
     // MARK: Daten
@@ -164,6 +164,32 @@ struct CVBrowsePage: View {
     }
 
     private func selectEntry(_ e: CVViewerEntry) { state.selectedID = e.id }
+
+    // MARK: Mehrfachauswahl
+    /// sichtbare Einträge in Listen-Reihenfolge
+    private var visibleOrder: [String] { groups.flatMap(\.items).map(\.id) }
+    /// Klick auf Zeile/Kachel: ⌘ = umschalten, ⇧ = Bereich, bei aktiver Auswahl jeder Klick = umschalten
+    private func tap(_ item: CVItem) {
+        let f = NSEvent.modifierFlags
+        var p = state.picks
+        if p.click(item.id, command: f.contains(.command), shift: f.contains(.shift), order: visibleOrder) {
+            withAnimation(.easeOut(duration: 0.12)) { state.picks = p }
+            state.selectedID = item.id
+            listFocused = true
+            return
+        }
+        state.selectedID = item.id
+        listFocused = true
+        if narrow { sheetItem = item }
+    }
+    private func togglePick(_ item: CVItem) {
+        var p = state.picks; p.toggle(item.id)
+        withAnimation(.easeOut(duration: 0.12)) { state.picks = p }
+    }
+    private func copyPicked() {
+        let ids = state.picks.ordered(by: visibleOrder + cv.items.map(\.id))
+        cv.copyMany(ids.compactMap { cv.item($0) })
+    }
 
     /// Leertaste = Quick Look auf dem gewählten Bild (wie im Finder)
     private func quickLookSelected() -> KeyPress.Result {
@@ -225,7 +251,7 @@ struct CVBrowsePage: View {
                 }
                 .frame(maxWidth: 860, alignment: .leading)
                 .padding(.horizontal, 40)
-                .padding(.top, 34).padding(.bottom, 60)
+                .padding(.top, 34).padding(.bottom, state.picks.isActive ? 110 : 60)
                 .frame(maxWidth: .infinity)
             }
             .scrollIndicators(.automatic)
@@ -234,7 +260,31 @@ struct CVBrowsePage: View {
             .focusEffectDisabled()
             .onKeyPress(.downArrow) { move(1, proxy); return .handled }
             .onKeyPress(.upArrow) { move(-1, proxy); return .handled }
-            .onKeyPress(.return) { if let s = selected { cv.copy(s) }; return .handled }
+            .onKeyPress(.return) {
+                if state.picks.isActive { copyPicked() } else if let s = selected { cv.copy(s) }
+                return .handled
+            }
+            .onKeyPress(.escape) {
+                guard state.picks.isActive else { return .ignored }
+                withAnimation(.easeOut(duration: 0.12)) { state.picks.clear() }
+                return .handled
+            }
+            .onKeyPress(characters: CharacterSet(charactersIn: "ac"), phases: .down) { k in
+                guard k.modifiers.contains(.command) else { return .ignored }
+                if k.characters == "a" { withAnimation(.easeOut(duration: 0.12)) { state.picks.selectAll(visibleOrder) }; return .handled }
+                if k.characters == "c", state.picks.isActive { copyPicked(); return .handled }
+                return .ignored
+            }
+            .overlay(alignment: .bottom) {
+                if state.picks.isActive {
+                    CVSelectionBar(count: state.picks.count,
+                                   onClear: { withAnimation(.easeOut(duration: 0.12)) { state.picks.clear() } },
+                                   onCopy: copyPicked)
+                        .frame(maxWidth: 620)
+                        .padding(.horizontal, 40).padding(.bottom, 18)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
             .onKeyPress(.space) { quickLookSelected() }
         }
     }
@@ -327,10 +377,10 @@ struct CVBrowsePage: View {
                         ForEach(Array(g.items.enumerated()), id: \.element.id) { j, item in
                             if j > 0 { Rectangle().fill(VF.hairline).frame(height: 1) }
                             CVItemRow(item: item, selected: item.id == state.selectedID,
-                                      showCollection: collectionID == nil, fresh: cv.freshIDs.contains(item.id)) {
-                                state.selectedID = item.id
-                                listFocused = true
-                                if narrow { sheetItem = item }
+                                      showCollection: collectionID == nil, fresh: cv.freshIDs.contains(item.id),
+                                      picking: state.picks.isActive, picked: state.picks.contains(item.id),
+                                      onPick: { togglePick(item) }) {
+                                tap(item)
                             }
                             .id(item.id)
                             .transition(.asymmetric(insertion: .move(edge: .top).combined(with: .opacity), removal: .opacity))
@@ -349,10 +399,10 @@ struct CVBrowsePage: View {
                 HubLabel(g.label).frame(height: 22).padding(.bottom, 10).padding(.top, i == 0 ? 0 : 26)
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 150, maximum: 220), spacing: 12)], spacing: 12) {
                     ForEach(g.items) { item in
-                        CVImageTile(item: item, selected: item.id == state.selectedID) {
-                            state.selectedID = item.id
-                            listFocused = true
-                            if narrow { sheetItem = item }
+                        CVImageTile(item: item, selected: item.id == state.selectedID,
+                                    picking: state.picks.isActive, picked: state.picks.contains(item.id),
+                                    onPick: { togglePick(item) }) {
+                            tap(item)
                         } onOpen: {
                             state.selectedID = item.id
                             let list = imageEntries
@@ -395,6 +445,9 @@ struct CVBrowsePage: View {
 struct CVImageTile: View {
     let item: CVItem
     let selected: Bool
+    var picking = false
+    var picked = false
+    var onPick: () -> Void = {}
     let onSelect: () -> Void
     /// Doppelklick: groß ansehen
     var onOpen: () -> Void = {}
@@ -420,6 +473,13 @@ struct CVImageTile: View {
                             .frame(width: 22, height: 22).background(.black.opacity(0.45), in: Circle()).padding(7)
                     }
                 }
+                .overlay(alignment: .topLeading) {   // Mehrfachauswahl: Kreis oben links (beim Hovern oder solange gewählt wird)
+                    if picking || hover {
+                        Button(action: onPick) { CVPickCircle(checked: picked, size: 22, onImage: true) }
+                            .buttonStyle(.plain).padding(8)
+                            .help(picked ? "Abwählen" : "Auswählen – mehrere zusammen kopieren (auch ⌘-Klick)")
+                    }
+                }
             HStack(spacing: 6) {
                 Text(HubFormat.time(item.date)).font(.system(size: 12)).monospacedDigit().foregroundStyle(VF.muted)
                 if item.ocr != nil { Image(systemName: "text.viewfinder").font(.system(size: 11)).foregroundStyle(VF.muted).help("Text erkannt") }
@@ -431,7 +491,7 @@ struct CVImageTile: View {
         .background(VF.card)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
-            .stroke(selected ? VF.ink : VF.hairline, lineWidth: selected ? 2 : 1))
+            .stroke(picked || selected ? VF.ink : VF.hairline, lineWidth: picked || selected ? 2 : 1))
         .shadow(color: .black.opacity(hover ? 0.07 : 0), radius: 8, y: 3)
         .contentShape(Rectangle())
         .onHover { hover = $0 }

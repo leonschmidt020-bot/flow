@@ -138,6 +138,20 @@ final class CommandChannel: NSObject {
             }
             if let id = id, SharedVault.shared.copyToPasteboard(id: id) { return Result(ok: true, id: id) }
             return Result(ok: false, error: "Eintrag nicht gefunden")
+        case "copyMany":
+            // Mehrfachauswahl (multiselect.swift): ids als Liste oder kommagetrennt; Reihenfolge bleibt erhalten
+            let raw: [String] = (o["ids"] as? [String]) ?? (str(o, "ids")?.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) } ?? [])
+            let ids = raw.filter { !$0.isEmpty }
+            guard !ids.isEmpty else { return Result(ok: false, error: "ids fehlt") }
+            let plan = MultiCopy.plan(cvSelectionEntries(ids))
+            let pb = NSPasteboard.general
+            guard MultiCopy.write(plan, to: pb) else { return Result(ok: false, error: plan.skipped > 0 ? "nicht verfuegbar" : "Eintraege nicht gefunden") }
+            AppState.shared.lastChange = pb.changeCount   // nicht als neuer Verlaufs-Eintrag erfassen
+            let sharedIds = ids.filter { store.item($0) == nil && SharedVault.shared.item($0) != nil }
+            if !sharedIds.isEmpty { SharedSeen.shared.markSeen(sharedIds) }
+            if str(o, "toast") != "false" && (o["toast"] as? Bool) != false { Toast.shared.show(MultiCopy.toastText(plan)) }
+            return Result(ok: true, extra: ["images": plan.images, "texts": plan.texts, "files": plan.files, "skipped": plan.skipped,
+                                            "message": MultiCopy.toastText(plan)])
         case "pin", "unpin":
             guard let id = id else { return Result(ok: false, error: "id fehlt") }
             // scope=shared: den geteilten Eintrag meinen (gleiche id wie der Verlaufs-Eintrag, aus dem geteilt wurde)

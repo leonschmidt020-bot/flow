@@ -127,6 +127,11 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     let storageLabel = NSTextField(labelWithString: "")
     let storageTrack = NSView(), storageFill = NSView()
     let cleanupBtn = FlatButton()
+    // Mehrfachauswahl (multiselect.swift / multiselect_panel.swift)
+    var multi = MultiSelection()
+    let selBar = SelectionBarView()
+    let selCount = NSTextField(labelWithString: "")
+    let selCopyBtn = NSButton(), selClearBtn = NSButton()
     lazy var globePlaceholder: NSImage? = NSImage(systemSymbolName: "globe", accessibilityDescription: nil)?
         .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 56, weight: .light).applying(NSImage.SymbolConfiguration(paletteColors: [NSColor.white.withAlphaComponent(0.35)])))
 
@@ -265,6 +270,7 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         pairBtn.sizeToFit(); pairBtn.frame.origin = NSPoint(x: px + (pw - pairBtn.frame.width) / 2, y: H/2 - 36)
         pairBtn.isHidden = true; effect.addSubview(pairBtn)
         setupSharedFileUI()
+        setupSelectionBar()
         buildChips(); buildFilters()
     }
     func styleIconButton(_ b: NSButton, _ sym: String, tip: String, action: Selector) {
@@ -551,7 +557,7 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
                 || (it.ocrText ?? "").lowercased().contains(q)
                 || ((it.files?.contains { $0.name.lowercased().contains(q) }) ?? false))
         }
-        buildDisplay(); table.reloadData()
+        buildDisplay(); pruneSelection(); table.reloadData()
         if let first = firstItemRow() { selectRow(first) } else { showEmpty() }
     }
     func reloadIfVisible() { if panel.isVisible { reload() } }
@@ -562,6 +568,7 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         let f = s.frame
         panel.setFrameOrigin(NSPoint(x: f.midX - W/2, y: f.midY - H/2 + f.height*0.10))
         search.stringValue = ""; currentCollection = nil; typeFilter = .all; revealSecrets = false; previewHover = false
+        multi.clear(); updateSelectionBar()
         SharedSeen.shared.reload()   // andere Programme markieren ebenfalls als gesehen
         buildChips(); buildFilters(); reload()
         panel.makeKeyAndOrderFront(nil); panel.makeFirstResponder(search)
@@ -598,6 +605,14 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             if cmd, ch == "j" { self.toggleShareSelected(); return nil }   // Cmd+J: mit dem Partner teilen / zuruecknehmen
             if cmd, e.keyCode == 51 { self.deleteSelected(); return nil }  // Cmd+⌫ löschen
             if self.panel.isKeyWindow {   // nicht während NSAlert (Neuer Bereich) abfangen
+                // Mehrfachauswahl: ⌘A = alle im aktuellen Filter (ausser im Vorschautext), ⌘C/Enter = alle kopieren, Esc = aufheben
+                let plain = e.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty
+                if cmd, ch == "a", !(self.panel.firstResponder === self.prevText) { self.selectAllVisible(); return nil }
+                if self.multi.isActive {
+                    if cmd, ch == "c" { self.copyAllSelected(close: false); return nil }
+                    if plain, e.keyCode == 36 || e.keyCode == 76 { self.copyAllSelected(close: true); return nil }
+                    if e.keyCode == 53 { if !ActionBar.collapseActive() { self.clearSelection() }; return nil }   // offene Leiste zuerst zu
+                }
                 // Cmd+1…9: n-ten Eintrag kopieren und schliessen
                 if cmd, !e.modifierFlags.contains(.shift), let n = Int(ch), (1...9).contains(n) { self.quickPaste(n); return nil }
                 // Cmd+E: Text-Eintrag bearbeiten
@@ -622,6 +637,7 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     }
     func hide() {
         if editingId != nil { finishEditUI() }   // ungespeicherte Bearbeitung verwerfen
+        clearSelection(refresh: false)           // Auswahl gilt nur, solange das Panel offen ist
         CVQuickLook.shared.close()
         panel.orderOut(nil)
         seenTimer?.invalidate(); seenTimer = nil
@@ -699,8 +715,8 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
     func tableView(_ t: NSTableView, viewFor c: NSTableColumn?, row: Int) -> NSView? {
         switch display[row] {
         case .header(let title): return makeHeader(title)
-        case .item(let it): return makeItemRow(it, row: row)
-        case .shared(let sh): return makeSharedRow(sh, row: row)
+        case .item(let it): let v = makeItemRow(it, row: row); decorateForSelection(v, id: it.id); return v
+        case .shared(let sh): let v = makeSharedRow(sh, row: row); decorateForSelection(v, id: sh.id); return v
         }
     }
     func makeHeader(_ title: String) -> NSView {
@@ -1348,6 +1364,8 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             let hit = cell.hitTest(p)
             if hit is NSButton || ((hit as? ActionBar)?.machine.isArmed ?? false) { return }
         }
+        // Mehrfachauswahl: ⌘-Klick schaltet um, ⇧-Klick nimmt einen Bereich, bei aktiver Auswahl schaltet jeder Klick um
+        if handleSelectionClick(row: r, flags: NSApp.currentEvent?.modifierFlags ?? []) { return }
         activateRow(r)
     }
     /// Zeile „waehlen" = kopieren + einfuegen
@@ -1375,6 +1393,12 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         menu.removeAllItems()
         let r = table.clickedRow
         guard editingId == nil, r >= 0, r < display.count else { return }
+        if let rid = rowId(display[r]) {   // Mehrfachauswahl
+            let on = multi.contains(rid)
+            menu.addItem(menuItem(on ? "Abwählen" : (multi.isActive ? "Zur Auswahl hinzufügen" : "Auswählen (mehrere kopieren)"), on ? "checkmark.circle" : "checkmark.circle.fill", #selector(selectToggleAction(_:)), rid))
+            if multi.isActive { menu.addItem(menuItem("Alle \(multi.count) kopieren", "doc.on.doc.fill", #selector(selCopyClicked), nil)) }
+            menu.addItem(.separator())
+        }
         if case .shared(let sh) = display[r] {
             menu.addItem(menuItem("Kopieren", "doc.on.doc", #selector(sharedCopyAction(_:)), sh.id))
             addSharedFileMenuItems(menu, sh)
@@ -1425,6 +1449,7 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         del.image = NSImage(systemSymbolName: "trash", accessibilityDescription: nil)
         del.representedObject = it.id; del.target = self; menu.addItem(del)
     }
+    @objc func selectToggleAction(_ s: NSMenuItem) { if let id = s.representedObject as? String { toggleSelection(id) } }
     @objc func editAction(_ s: NSMenuItem) { if let id = s.representedObject as? String, let it = Store.shared.item(id) { beginEdit(it) } }
     @objc func ocrAction(_ s: NSMenuItem) {
         guard let id = s.representedObject as? String, let it = Store.shared.item(id) else { return }
@@ -1485,11 +1510,12 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         case #selector(NSResponder.moveDown(_:)): selectRow(rows.first(where: { $0 > cur }) ?? rows.last!, scroll: true); return true
         case #selector(NSResponder.moveUp(_:)): selectRow(rows.last(where: { $0 < cur }) ?? rows.first!, scroll: true); return true
         case #selector(NSResponder.insertNewline(_:)):
+            if multi.isActive { copyAllSelected(close: true); return true }
             if cur >= 0, cur < display.count {
                 if case .item(let it) = display[cur] { choose(it) } else if case .shared(let sh) = display[cur] { chooseShared(sh) }
             }
             return true
-        case #selector(NSResponder.cancelOperation(_:)): hide(); return true
+        case #selector(NSResponder.cancelOperation(_:)): if multi.isActive { clearSelection() } else { hide() }; return true
         default: return false
         }
     }

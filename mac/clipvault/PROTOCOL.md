@@ -168,6 +168,7 @@ ClipVault ergänzt „gelernt von" (= eigener Name, siehe 4) und verschickt es �
 |---|---|---|---|
 | `ping` | – | nichts (Schlüssel testen) | – |
 | `copy` | `id` | Eintrag in die Zwischenablage (wie Klick, rückt nach oben, Kopier-Pille). Auch für ids aus „Geteilt" — Dateien als **echte Datei-URL** (einfügbar in Finder, Mail, WhatsApp); noch nicht geladene werden erst geladen und landen danach in der Zwischenablage | id |
+| `copyMany` | `ids` (Liste oder kommagetrennt), opt. `toast` = `false` | **mehrere** Einträge auf einmal in die Zwischenablage (Mehrfachauswahl, Reihenfolge wie übergeben): je Bild/Datei ein Pasteboard-Item (Datei-URL, bei Bildern + PNG aus `~/Library/Caches/flow-clipvault/export/<id>.png`, 24 h), auf dem ersten Item Klartext = maskierte Pfade (`a\ b.png`, Leerzeichen-getrennt), danach Texte durch Leerzeilen getrennt. Claude Code macht beim Einfügen mit ⌘V aus jedem Bildpfad ein `[Image #n]`. Rückt nichts nach oben. Antwort zusätzlich `images`, `texts`, `files`, `skipped`, `message` | – |
 | `pin` / `unpin` | `id`, opt. `scope` = `shared` | anheften / lösen. Ohne `scope` gewinnt ein Verlaufs-Eintrag mit gleicher id; `scope=shared` meint den geteilten Eintrag (große Dateien laufen angeheftet nicht ab) | id |
 | `delete` | `id` | löschen (inkl. Bild/Datei-Kopie) | id |
 | `setCollection` | `id`, `collection` (id oder `null`) | in Bereich legen / herausnehmen | id |

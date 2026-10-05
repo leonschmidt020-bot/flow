@@ -13,7 +13,8 @@ final class Toast {
     let effect = NSVisualEffectView()
     let label = NSTextField(labelWithString: "In Zwischenablage")
     var timer: Timer?
-    let W: CGFloat = 234, H: CGFloat = 52
+    let baseW: CGFloat = 234, H: CGFloat = 52
+    var W: CGFloat = 234   // waechst mit langen Meldungen („3 Bilder kopiert – in Claude Code …")
     init() {
         panel = NSPanel(contentRect: NSRect(x:0,y:0,width:W,height:H), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = true
@@ -39,6 +40,11 @@ final class Toast {
     func show(_ text: String = "In Zwischenablage") {
         label.stringValue = text
         timer?.invalidate()
+        let tw = ceil(text.size(withAttributes: [.font: label.font ?? NSFont.systemFont(ofSize: 14, weight: .medium)]).width)
+        W = min(560, max(baseW, tw + 55 + 22))
+        panel.setContentSize(NSSize(width: W, height: H))
+        effect.frame = NSRect(x: 0, y: 0, width: W, height: H)
+        label.frame = NSRect(x: 55, y: (H-22)/2, width: W-66, height: 22)
         let m = NSEvent.mouseLocation
         let screen = NSScreen.screens.first(where: { NSMouseInRect(m, $0.frame, false) }) ?? NSScreen.main
         let f = screen?.frame ?? NSRect(x:0,y:0,width:1440,height:900)

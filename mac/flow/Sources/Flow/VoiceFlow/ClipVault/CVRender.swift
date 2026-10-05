@@ -14,7 +14,7 @@ enum CVDev {
             return render(dir: args.count > 2 ? args[2] : NSTemporaryDirectory() + "cv_render", demo: args.contains("demo"))
         case "--cv-test": return selfTest()
         case "--cv-ping": return ping()
-        default: return SharedInboxDev.run(args)
+        default: return CVPickDev.run(args) ?? SharedInboxDev.run(args)
         }
     }
 
@@ -109,6 +109,20 @@ enum CVDev {
             ("14_einstellungen", nil, { st.section = .einstellungen }),
             ("15_klein_verlauf", NSSize(width: 1000, height: 680), { st.section = .verlauf; st.selectedID = first { $0.collection == nil } }),
             ("16_ohne_seitenleiste", NSSize(width: 1100, height: 720), { hub.sidebarVisible = false }),
+            // Mehrfachauswahl (nur im Speicher): drei Einträge im Verlauf gewählt · drei Bilder auf der Bilder-Seite
+            ("17_auswahl_verlauf", nil, {
+                st.section = .verlauf; st.openCollection = nil
+                let ids = cv.items.filter { $0.collection == nil && !$0.pinned }.prefix(4).map(\.id)
+                st.picks = CVPickSet(); [0, 1, 3].filter { $0 < ids.count }.forEach { st.picks.toggle(ids[$0]) }
+                st.selectedID = ids.first
+            }),
+            ("18_auswahl_bilder", nil, {
+                st.section = .bilder; st.openCollection = nil
+                let ids = cv.items.filter { $0.kind == .image }.prefix(3).map(\.id)
+                st.selectedID = ids.first
+                // erst nach dem Seitenwechsel setzen (der Wechsel leert die Auswahl absichtlich)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { st.picks = CVPickSet(); ids.forEach { st.picks.toggle($0) } }
+            }),
         ]
         CVShared.shared.start()
         // CV_RENDER_ONLY=03,03b,13b … → nur diese Bilder (z. B. ohne „12_geteilt_code“, das echt einen Kopplungscode anfordert)

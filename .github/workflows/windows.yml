@@ -89,8 +89,10 @@ jobs:
         shell: pwsh
         run: |
           $env:ELECTRON_RUN_AS_NODE = "1"
-          & "release/win-unpacked/Flow.exe" scripts/check-packaged.cjs
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # Flow.exe ist eine GUI-App: pwsh wartet sonst nicht und der Exit-Code ginge verloren
+          $p = Start-Process -FilePath "release/win-unpacked/Flow.exe" -ArgumentList "scripts/check-packaged.cjs" -Wait -PassThru -NoNewWindow -RedirectStandardOutput check.out -RedirectStandardError check.err
+          Get-Content check.out, check.err
+          if ($p.ExitCode -ne 0) { exit $p.ExitCode }
 
       - name: Upload installer
         uses: actions/upload-artifact@v4

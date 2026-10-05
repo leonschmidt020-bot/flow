@@ -2,7 +2,9 @@
 // 05.10.2026: Der Installer schloss koffi/src aus → beim Freund „Cannot find module './src/koffi/index.cjs'“,
 // Einfügen ging nicht. Läuft in der CI mit der gepackten Flow.exe (ELECTRON_RUN_AS_NODE=1, also Electrons Node-ABI).
 const path = require('path');
-const root = path.resolve(__dirname, '..', 'release', 'win-unpacked', 'resources', 'app.asar.unpacked', 'node_modules');
+// Über app.asar laden wie die echte App (Electron leitet .node-Dateien selbst nach app.asar.unpacked um);
+// direkt aus app.asar.unpacked fehlen reine JS-Abhängigkeiten wie node-gyp-build.
+const root = path.resolve(__dirname, '..', 'release', 'win-unpacked', 'resources', 'app.asar', 'node_modules');
 let bad = 0;
 function check(name, fn) {
   try { fn(require(path.join(root, name))); console.log('ok  ', name); }

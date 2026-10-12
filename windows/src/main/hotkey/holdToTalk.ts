@@ -45,7 +45,7 @@ export class HoldToTalk {
 
   /** Alt Gr on German/European layouts: Windows sends a fake left Ctrl right before right Alt.
    *  For the Alt Gr hotkey that Ctrl is not a second key – otherwise dictation never starts. */
-  private altGrShadow(code: number) { return code === K.Ctrl && this.combo.length === 1 && this.combo[0].length === 1 && this.combo[0][0] === K.AltRight; }
+  private altGrShadow(code: number) { return code === K.Ctrl && this.combo.length === 1 && this.combo[0]?.length === 1 && this.combo[0]?.[0] === K.AltRight; }
   private isComboKey(code: number) { return this.combo.some((g) => g.includes(code)); }
   private comboDown() { return this.combo.every((g) => g.some((k) => this.pressed.has(k))); }
 

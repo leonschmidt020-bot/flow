@@ -20,6 +20,7 @@ public static class K {
   [DllImport("user32.dll", SetLastError = true)] public static extern uint SendInput(uint n, IN[] inputs, int size);
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
   public static uint Key(ushort vk, ushort scan, bool ext, bool up) {
     var i = new IN[1]; i[0].type = 1; i[0].ki.vk = vk; i[0].ki.scan = scan;
@@ -32,6 +33,8 @@ public static class K {
 
 function Step($m) { Write-Host "» $m" }
 function Fail($m) { Write-Host "✗ GERÄTE-TEST FEHLGESCHLAGEN: $m"; if ($log -and (Test-Path $log)) { Write-Host '--- flow.log ---'; Get-Content $log -Tail 60 }; exit 1 }
+# Windows 11 lässt SetForegroundWindow nur nach einer Eingabe zu → kurz Alt tippen (wie ein Nutzer)
+function Focus-Window([IntPtr]$h) { [void][K]::Key(0x12, 0x38, $false, $false); [void][K]::Key(0x12, 0x38, $false, $true); [void][K]::ShowWindow($h, 9); [void][K]::SetForegroundWindow($h) }
 function Ok($m) { Write-Host "✓ $m" }
 
 Write-Host "Windows: $([Environment]::OSVersion.VersionString) · CPU: $env:PROCESSOR_ARCHITECTURE ($env:PROCESSOR_IDENTIFIER)"
@@ -78,15 +81,15 @@ function Stop-Flow { if ($script:flow -and -not $script:flow.HasExited) { Stop-P
 # Diktat-Taste halten → Text muss in Notepad stehen, Zwischenablage danach wie vorher
 function Test-Dictation([string]$name, [scriptblock]$down, [scriptblock]$up) {
   Set-Clipboard -Value 'VORHER-1234'
-  Get-Process -Name notepad -ErrorAction SilentlyContinue | Stop-Process -Force
+  Get-Process -Name notepad -ErrorAction SilentlyContinue | Stop-Process -Force; Start-Sleep 1
   Start-Process notepad | Out-Null
   $deadline = (Get-Date).AddSeconds(30); $npPid = 0
   while ((Get-Date) -lt $deadline) {
-    $w = Get-Process -Name notepad -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
-    if ($w) { [void][K]::SetForegroundWindow($w.MainWindowHandle); Start-Sleep -Milliseconds 400; if ([K]::ForegroundPid() -eq $w.Id) { $npPid = $w.Id; break } }
+    $w = Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 -and ($_.ProcessName -match '^notepad$' -or $_.MainWindowTitle -match 'Notepad|Editor') } | Select-Object -First 1
+    if ($w) { Focus-Window $w.MainWindowHandle; Start-Sleep -Milliseconds 400; if ([K]::ForegroundPid() -eq $w.Id) { $npPid = $w.Id; break } }
     Start-Sleep -Milliseconds 300
   }
-  if (-not $npPid) { Fail 'Notepad kommt nicht in den Vordergrund' }
+  if (-not $npPid) { Get-Process | Where-Object { $_.MainWindowHandle -ne 0 } | ForEach-Object { Write-Host "  Fenster: $($_.ProcessName) '$($_.MainWindowTitle)'" }; Fail 'Notepad kommt nicht in den Vordergrund' }
   $before = @(Select-String -Path $log -Pattern 'dictation: ').Count
   $dur = [Math]::Ceiling((Get-Item $Wav).Length / 32000.0) + 1
   Step "[$name] halten $dur s und sprechen …"
@@ -100,7 +103,7 @@ function Test-Dictation([string]$name, [scriptblock]$down, [scriptblock]$up) {
   $clipAfter = Get-Clipboard -Raw
   if (($clipAfter -replace '\s+$','') -ne 'VORHER-1234') { Fail "[$name] Zwischenablage nicht wiederhergestellt (steht: '$clipAfter')" }
   Ok "[$name] Zwischenablage danach wiederhergestellt"
-  [void][K]::SetForegroundWindow((Get-Process -Id $npPid).MainWindowHandle); Start-Sleep -Milliseconds 300
+  Focus-Window (Get-Process -Id $npPid).MainWindowHandle; Start-Sleep -Milliseconds 300
   [void][K]::Key(0x11, 0x1D, $false, $false); [void][K]::Key(0x41, 0x1E, $false, $false); [void][K]::Key(0x41, 0x1E, $false, $true)
   [void][K]::Key(0x43, 0x2E, $false, $false); [void][K]::Key(0x43, 0x2E, $false, $true); [void][K]::Key(0x11, 0x1D, $false, $true)
   Start-Sleep -Milliseconds 600

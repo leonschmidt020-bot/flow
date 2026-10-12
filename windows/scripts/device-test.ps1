@@ -21,6 +21,17 @@ public static class K {
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
   [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
+  [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint a, uint b, bool attach);
+  [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+  public static bool Focus(IntPtr h) {
+    uint p; uint fg = GetWindowThreadProcessId(GetForegroundWindow(), out p);
+    uint me = GetCurrentThreadId(); uint target = GetWindowThreadProcessId(h, out p);
+    AttachThreadInput(me, fg, true); AttachThreadInput(target, fg, true);
+    ShowWindow(h, 9); BringWindowToTop(h); bool ok = SetForegroundWindow(h);
+    AttachThreadInput(target, fg, false); AttachThreadInput(me, fg, false);
+    return ok;
+  }
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
   public static uint Key(ushort vk, ushort scan, bool ext, bool up) {
     var i = new IN[1]; i[0].type = 1; i[0].ki.vk = vk; i[0].ki.scan = scan;
@@ -33,8 +44,9 @@ public static class K {
 
 function Step($m) { Write-Host "» $m" }
 function Fail($m) { Write-Host "✗ GERÄTE-TEST FEHLGESCHLAGEN: $m"; if ($log -and (Test-Path $log)) { Write-Host '--- flow.log ---'; Get-Content $log -Tail 60 }; exit 1 }
-# Windows 11 lässt SetForegroundWindow nur nach einer Eingabe zu → kurz Alt tippen (wie ein Nutzer)
-function Focus-Window([IntPtr]$h) { [void][K]::Key(0x12, 0x38, $false, $false); [void][K]::Key(0x12, 0x38, $false, $true); [void][K]::ShowWindow($h, 9); [void][K]::SetForegroundWindow($h) }
+# Windows 11 sperrt SetForegroundWindow für Hintergrund-Prozesse → kurz an den Eingabe-Thread des
+# aktuellen Vordergrundfensters hängen (übliches Verfahren, kein Tastendruck)
+function Focus-Window([IntPtr]$h) { [void][K]::Focus($h) }
 function Ok($m) { Write-Host "✓ $m" }
 
 Write-Host "Windows: $([Environment]::OSVersion.VersionString) · CPU: $env:PROCESSOR_ARCHITECTURE ($env:PROCESSOR_IDENTIFIER)"
@@ -86,7 +98,7 @@ function Test-Dictation([string]$name, [scriptblock]$down, [scriptblock]$up) {
   $deadline = (Get-Date).AddSeconds(30); $npPid = 0
   while ((Get-Date) -lt $deadline) {
     $w = Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 -and ($_.ProcessName -match '^notepad$' -or $_.MainWindowTitle -match 'Notepad|Editor') } | Select-Object -First 1
-    if ($w) { Focus-Window $w.MainWindowHandle; Start-Sleep -Milliseconds 400; if ([K]::ForegroundPid() -eq $w.Id) { $npPid = $w.Id; break } }
+    if ($w) { Focus-Window $w.MainWindowHandle; Start-Sleep -Milliseconds 400; if ([K]::GetForegroundWindow() -eq $w.MainWindowHandle -or [K]::ForegroundPid() -eq $w.Id) { $npPid = $w.Id; break } }
     Start-Sleep -Milliseconds 300
   }
   if (-not $npPid) { Get-Process | Where-Object { $_.MainWindowHandle -ne 0 } | ForEach-Object { Write-Host "  Fenster: $($_.ProcessName) '$($_.MainWindowTitle)'" }; Fail 'Notepad kommt nicht in den Vordergrund' }

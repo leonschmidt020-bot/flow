@@ -2,7 +2,7 @@ import { Menu, Tray, nativeImage, type MenuItemConstructorOptions } from 'electr
 import { paths } from './paths';
 import { t, hotkeyShort, type Locale } from '../shared/i18n';
 
-export interface TrayActions { openHub(): void; openClipVault(): void; togglePause(): void; checkUpdates(): void; quit(): void }
+export interface TrayActions { openHub(): void; openClipVault(): void; clipVaultOn(): boolean; togglePause(): void; checkUpdates(): void; quit(): void }
 
 export class FlowTray {
   private tray: Tray | null = null;
@@ -24,7 +24,7 @@ export class FlowTray {
     if (!this.tray) return;
     this.tray.setContextMenu(Menu.buildFromTemplate([
       { label: t(locale, 'trayOpen'), click: () => this.a.openHub() },
-      { label: t(locale, 'trayClipVault'), click: () => this.a.openClipVault() },
+      ...(this.a.clipVaultOn() ? [{ label: t(locale, 'trayClipVault'), click: () => this.a.openClipVault() }] : []),
       { type: 'separator' },
       ...this.extraItems(),
       { type: 'separator' },

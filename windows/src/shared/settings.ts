@@ -27,6 +27,8 @@ export interface Settings {
   historyEnabled: boolean;
   historyRetentionDays: number;
   pillAlwaysVisible: boolean;
+  /** ClipVault (clipboard history + Ctrl+Shift+V). Off = nothing is recorded, the shortcut stays free */
+  clipVault: boolean;
   /** „Text dorthin, wo die Maus ist“: on key release the text goes into the window under the mouse */
   mouseTarget: boolean;
   /** … and Enter afterwards – only in terminals/chats (core/mouseTarget.ts › autoSend) */
@@ -58,6 +60,7 @@ export const DEFAULTS: Settings = {
   historyEnabled: true,
   historyRetentionDays: 90,
   pillAlwaysVisible: true,
+  clipVault: true,
   mouseTarget: false,
   mouseTargetAutoSend: false,
   mouseTargetHighlight: true,
@@ -133,6 +136,7 @@ export function migrateSettings(raw: unknown): Settings {
     historyEnabled: bool(r.historyEnabled, DEFAULTS.historyEnabled),
     historyRetentionDays: Math.min(3650, Math.max(1, days)),
     pillAlwaysVisible: bool(r.pillAlwaysVisible, DEFAULTS.pillAlwaysVisible),
+    clipVault: bool(r.clipVault, DEFAULTS.clipVault),
     mouseTarget: bool(r.mouseTarget, DEFAULTS.mouseTarget),
     mouseTargetAutoSend: bool(r.mouseTargetAutoSend, DEFAULTS.mouseTargetAutoSend),
     mouseTargetHighlight: bool(r.mouseTargetHighlight, DEFAULTS.mouseTargetHighlight),

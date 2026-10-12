@@ -257,30 +257,41 @@ async function main() {
   void asr.start(settings.engine, firstRun || asr.state.installed[settings.engine]);
   mic.warm();
 
-  // ── ClipVault ──
+  // ── ClipVault (Einstellung „ClipVault“: aus = nichts mitschreiben, Strg+Umschalt+V bleibt frei) ──
   let cv: ClipVaultHandle | null = null;
-  try {
-    cv = await initClipVault({
-      app, userDataDir: paths.userData, locale: settings.locale, isDev: !app.isPackaged,
-      assetsDir: path.join(paths.dist, 'clipvault', 'assets'),
-      registerHotkey: (acc, handler) => {
-        if (NO_HOTKEY) return null;
-        try { return globalShortcut.register(acc, handler) ? () => globalShortcut.unregister(acc) : null; } catch { return null; }
-      },
-      onToast: (m, kind) => pill.toast(m, kind),
-      isFlowWritingClipboard: () => writing,
-      onFlowClipboardWrite: (cb) => { cvListeners.add(cb); return () => cvListeners.delete(cb); },
-      sendToUi: (ch, payload) => { for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send('clipvault:event:' + ch, payload); },
-      log: (...a) => log('[clipvault]', ...a),
-    });
-  } catch (e) {
-    log('clipvault init failed', e);
-  }
+  let cvStarting: Promise<void> | null = null;
+  const startClipVault = (): Promise<void> => cvStarting ??= (async () => {
+    try {
+      cv = await initClipVault({
+        app, userDataDir: paths.userData, locale: settings.locale, isDev: !app.isPackaged,
+        assetsDir: path.join(paths.dist, 'clipvault', 'assets'),
+        registerHotkey: (acc, handler) => {
+          if (NO_HOTKEY) return null;
+          try { return globalShortcut.register(acc, handler) ? () => globalShortcut.unregister(acc) : null; } catch { return null; }
+        },
+        onToast: (m, kind) => pill.toast(m, kind),
+        isFlowWritingClipboard: () => writing,
+        onFlowClipboardWrite: (cb) => { cvListeners.add(cb); return () => cvListeners.delete(cb); },
+        sendToUi: (ch, payload) => { for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send('clipvault:event:' + ch, payload); },
+        log: (...a) => log('[clipvault]', ...a),
+      });
+    } catch (e) {
+      log('clipvault init failed', e);
+    }
+  })().finally(() => { cvStarting = null; });
+  const stopClipVault = async () => {
+    await cvStarting;
+    const h = cv; cv = null;
+    try { await h?.dispose(); } catch (e) { log('clipvault dispose', e); }
+  };
+  if (settings.clipVault) await startClipVault();
+  else log('clipvault: off (settings)');
 
   // ── tray ──
   const tray = new FlowTray({
     openHub: () => openHub(),
     openClipVault: () => (cv ? cv.openPanel() : openHub('clipvault')),
+    clipVaultOn: () => settings.clipVault,
     togglePause: () => {
       paused = !paused;
       hotkeys?.machine.setEnabled(!paused);
@@ -341,6 +352,7 @@ async function main() {
     if (prev.engine !== settings.engine) void asr.start(settings.engine, true);
     if (prev.startWithWindows !== settings.startWithWindows) applySystem();
     if (prev.pillAlwaysVisible !== settings.pillAlwaysVisible) pill.state({ alwaysVisible: settings.pillAlwaysVisible });
+    if (prev.clipVault !== settings.clipVault) void (settings.clipVault ? startClipVault() : stopClipVault()).then(() => { tray.update(settings.locale, settings.hotkey, paused); pushState(); });
     if (prev.locale !== settings.locale || prev.hotkey !== settings.hotkey) tray.update(settings.locale, settings.hotkey, paused);
     if (prev.learnFromEdits && !settings.learnFromEdits) learner?.stop();
     if (!prev.mouseTarget && settings.mouseTarget) uiaClient?.warm();

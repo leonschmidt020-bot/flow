@@ -59,3 +59,13 @@ describe('settings migration', () => {
     expect(migrateSettings(once)).toEqual(once);
   });
 });
+
+describe('ClipVault switch', () => {
+  it('is on by default and for old settings files', () => {
+    expect(migrateSettings({}).clipVault).toBe(true);
+    expect(migrateSettings({ version: 2, hotkey: 'RightAlt' }).clipVault).toBe(true);
+  });
+  it('keeps „off“', () => {
+    expect(migrateSettings({ version: 2, clipVault: false }).clipVault).toBe(false);
+  });
+});

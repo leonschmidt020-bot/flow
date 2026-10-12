@@ -153,9 +153,12 @@ Stop-Flow
 $sf = Join-Path $data 'settings.json'
 $st = Get-Content $sf -Raw | ConvertFrom-Json
 $st.hotkey = 'RightAlt'
+$st.clipVault = $false   # wie beim Kollegen: ohne ClipVault
 $st | ConvertTo-Json -Depth 20 | Set-Content $sf -Encoding utf8
 Start-Flow
-Test-Dictation 'Alt Gr' {
+if (-not (Select-String -Path $log -Pattern 'clipvault: off' -Quiet)) { Fail 'ClipVault lässt sich nicht ausschalten' }
+Ok 'ClipVault aus – Diktat muss trotzdem gehen'
+Test-Dictation 'Alt Gr, ohne ClipVault' {
   [void][K]::Key(0xA2, 0x21D, $false, $false); [void][K]::Key(0xA5, 0x38, $true, $false)
 } {
   [void][K]::Key(0xA2, 0x21D, $false, $true); [void][K]::Key(0xA5, 0x38, $true, $true)

@@ -73,7 +73,7 @@ const I = {
 // ── sidebar ──
 function renderNav() {
   const nav = document.getElementById('nav')!;
-  nav.replaceChildren(...(['history', 'notetaker', 'prompts', 'dictionary', 'clipvault', 'settings'] as Page[]).map((p) =>
+  nav.replaceChildren(...(['history', 'notetaker', 'prompts', 'dictionary', 'clipvault', 'settings'] as Page[]).filter((p) => p !== 'clipvault' || S.settings.clipVault !== false).map((p) =>
     h('button', { class: 'nav-item' + (p === page ? ' active' : ''), on: { click: () => go(p) } }, svg(I[p]),
       p === 'notetaker' ? mt(L(), 'nav') : p === 'prompts' ? apt(L(), 'nav') : t(p === 'history' ? 'navHistory' : p === 'dictionary' ? 'navDictionary' : p === 'clipvault' ? 'navClipVault' : 'navSettings'))));
 }
@@ -287,6 +287,7 @@ function settingsPage(): PageView {
     h('div', { class: 'section' }, h('h2', null, t('secSystem')), h('div', { class: 'card' },
       row(t('autostart'), null, sw('startWithWindows')),
       row(t('pillVisible'), t('pillVisibleDesc'), sw('pillAlwaysVisible')),
+      row(t('clipVaultOn'), t('clipVaultOnDesc'), sw('clipVault')),
       row(t('historyKeep'), t('historyKeepDesc', { days: S.settings.historyRetentionDays }), sw('historyEnabled')),
       row(t('autoUpdate'), t('autoUpdateDesc'), sw('autoUpdate')))),
     h('div', { class: 'section' }, h('h2', null, t('secAbout')), h('div', { class: 'card' },
@@ -327,6 +328,7 @@ function meetingPage(): PageView {
 }
 
 function go(p: Page) {
+  if (p === 'clipvault' && S.settings.clipVault === false) p = 'settings';
   view?.dispose?.();
   page = p;
   view = p === 'history' ? historyPage() : p === 'notetaker' ? meetingPage() : p === 'prompts' ? promptPage() : p === 'dictionary' ? dictionaryPage() : p === 'clipvault' ? clipVaultPage() : settingsPage();

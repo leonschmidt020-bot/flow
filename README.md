@@ -10,7 +10,7 @@ Dazu gehört **ClipVault**, ein Verlauf für die Zwischenablage mit Suche, Bilde
 
 | | Mac | Windows |
 |---|---|---|
-| Diktat-Taste | **fn** halten (doppelt tippen = freihändig) | **rechte Strg** halten (doppelt tippen = freihändig) |
+| Diktat-Taste | **fn** halten (doppelt tippen = freihändig) | **rechte Strg** halten (doppelt tippen = freihändig) – ohne rechte Strg (Copilot-Taste, z. B. Samsung Galaxy Book): in den Einstellungen **Alt Gr** wählen |
 | Spracherkennung | Parakeet (CoreML), optional Whisper | Parakeet v3 (sherpa-onnx), optional Whisper |
 | ClipVault | ⌘⇧V | Strg+Umschalt+V |
 | Voraussetzung | macOS 26+, Apple Silicon | Windows 10/11, 64-Bit |

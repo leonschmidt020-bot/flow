@@ -19,6 +19,21 @@ describe('hold to talk', () => {
     h.keyDown(K.CtrlRight); now += 800; h.keyUp(K.CtrlRight);
     expect(log).toEqual(['start:hold', 'stop']);
   });
+  it('Alt Gr (fake left Ctrl + right Alt, German layout) starts and stops dictation', () => {
+    const h = mk('RightAlt');
+    h.keyDown(K.Ctrl); h.keyDown(K.AltRight); now += 800; h.keyUp(K.Ctrl); h.keyUp(K.AltRight);
+    expect(log).toEqual(['start:hold', 'stop']);
+  });
+  it('Alt Gr + a letter (e.g. @) is a shortcut, not dictation', () => {
+    const h = mk('RightAlt');
+    h.keyDown(K.Ctrl); h.keyDown(K.AltRight); now += 40; h.keyDown(16); h.keyUp(16); h.keyUp(K.Ctrl); h.keyUp(K.AltRight);
+    expect(log).toEqual(['start:hold', 'cancel:chord']);
+  });
+  it('right Ctrl hotkey still treats left Ctrl as another key', () => {
+    const h = mk('RightCtrl');
+    h.keyDown(K.Ctrl); h.keyDown(K.CtrlRight); now += 800; h.keyUp(K.CtrlRight);
+    expect(log).toEqual([]);
+  });
   it('auto-repeat keydowns are ignored', () => {
     const h = mk();
     h.keyDown(K.CtrlRight); h.keyDown(K.CtrlRight); h.keyDown(K.CtrlRight); now += 500; h.keyUp(K.CtrlRight);

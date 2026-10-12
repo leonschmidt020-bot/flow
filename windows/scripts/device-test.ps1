@@ -49,73 +49,94 @@ Start-Sleep 3
 Get-Process Flow -ErrorAction SilentlyContinue | Stop-Process -Force   # runAfterFinish → eigene Instanz starten
 Start-Sleep 1
 
-# ── 2. Erster Start der installierten App (frisches Profil, Modell-Download wie beim Freund) ──
+# ── 2. Start der installierten App (frisches Profil, Modell-Download wie beim Freund) ──
 $data = Join-Path $env:RUNNER_TEMP 'flow-device-profile'
 Remove-Item $data -Recurse -Force -ErrorAction SilentlyContinue
 $env:FLOW_USER_DATA = $data
 $log = Join-Path $data 'logs\flow.log'
-Step 'Starte die installierte App (virtuelles Mikrofon) …'
-$flow = Start-Process -FilePath $exe -PassThru -ArgumentList @(
-  '--hidden', '--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', "--use-file-for-fake-audio-capture=$Wav")
-$t0 = Get-Date
-while ($true) {
-  if ($flow.HasExited) { Fail "App beendet sich beim Start (Exit $($flow.ExitCode))" }
-  if ((Test-Path $log) -and (Select-String -Path $log -Pattern 'asr: .* loaded in' -Quiet)) { break }
-  if ((Test-Path $log) -and (Select-String -Path $log -Pattern 'asr error' -Quiet)) { Fail 'Spracherkennung lädt nicht' }
-  if (((Get-Date) - $t0).TotalSeconds -gt $ModelTimeoutSec) { Fail 'Sprachmodell nicht rechtzeitig geladen' }
-  Start-Sleep 2
+$script:flow = $null
+
+function Start-Flow {
+  $script:flow = Start-Process -FilePath $exe -PassThru -ArgumentList @(
+    '--hidden', '--use-fake-ui-for-media-stream', '--use-fake-device-for-media-stream', "--use-file-for-fake-audio-capture=$Wav")
+  $skip = if (Test-Path $log) { (Get-Content $log).Count } else { 0 }
+  $t0 = Get-Date
+  while ($true) {
+    if ($script:flow.HasExited) { Fail "App beendet sich beim Start (Exit $($script:flow.ExitCode))" }
+    $new = if (Test-Path $log) { Get-Content $log | Select-Object -Skip $skip } else { @() }
+    if ($new -match 'asr error') { Fail 'Spracherkennung lädt nicht' }
+    if (($new -match 'asr: .* loaded in') -and ($new -match 'hotkey: hook started')) { break }
+    if (((Get-Date) - $t0).TotalSeconds -gt $ModelTimeoutSec) { Fail 'Sprachmodell/Tastatur-Hook nicht rechtzeitig bereit' }
+    Start-Sleep 2
+  }
+  Ok ("Sprachmodell geladen + Tastatur-Hook läuft nach {0:N0} s" -f ((Get-Date) - $t0).TotalSeconds)
+  Start-Sleep 6   # Aufwärm-Durchlauf
 }
-Ok ("Sprachmodell geladen nach {0:N0} s" -f ((Get-Date) - $t0).TotalSeconds)
-Start-Sleep 6   # Aufwärm-Durchlauf + Tastatur-Hook
-if (-not (Select-String -Path $log -Pattern 'hotkey: hook started' -Quiet)) { Fail 'Tastatur-Hook nicht gestartet' }
-Ok 'Tastatur-Hook läuft'
+
+function Stop-Flow { if ($script:flow -and -not $script:flow.HasExited) { Stop-Process -Id $script:flow.Id -Force; Start-Sleep 2 } }
+
+# Diktat-Taste halten → Text muss in Notepad stehen, Zwischenablage danach wie vorher
+function Test-Dictation([string]$name, [scriptblock]$down, [scriptblock]$up) {
+  Set-Clipboard -Value 'VORHER-1234'
+  Get-Process -Name notepad -ErrorAction SilentlyContinue | Stop-Process -Force
+  Start-Process notepad | Out-Null
+  $deadline = (Get-Date).AddSeconds(30); $npPid = 0
+  while ((Get-Date) -lt $deadline) {
+    $w = Get-Process -Name notepad -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+    if ($w) { [void][K]::SetForegroundWindow($w.MainWindowHandle); Start-Sleep -Milliseconds 400; if ([K]::ForegroundPid() -eq $w.Id) { $npPid = $w.Id; break } }
+    Start-Sleep -Milliseconds 300
+  }
+  if (-not $npPid) { Fail 'Notepad kommt nicht in den Vordergrund' }
+  $before = @(Select-String -Path $log -Pattern 'dictation: ').Count
+  $dur = [Math]::Ceiling((Get-Item $Wav).Length / 32000.0) + 1
+  Step "[$name] halten $dur s und sprechen …"
+  & $down; Start-Sleep -Seconds $dur; & $up
+  $deadline = (Get-Date).AddSeconds(40)
+  while ((Get-Date) -lt $deadline -and @(Select-String -Path $log -Pattern 'dictation: ').Count -le $before) { Start-Sleep -Milliseconds 500 }
+  $line = Select-String -Path $log -Pattern 'dictation: ' | Select-Object -Last 1
+  if (@(Select-String -Path $log -Pattern 'dictation: ').Count -le $before) { Fail "[$name] kein Diktat verarbeitet (Taste oder Mikrofon kam nicht an)" }
+  Ok "[$name] Diktat verarbeitet: $($line.Line -replace '^.*dictation: ','')"
+  Start-Sleep 2
+  $clipAfter = Get-Clipboard -Raw
+  if (($clipAfter -replace '\s+$','') -ne 'VORHER-1234') { Fail "[$name] Zwischenablage nicht wiederhergestellt (steht: '$clipAfter')" }
+  Ok "[$name] Zwischenablage danach wiederhergestellt"
+  [void][K]::SetForegroundWindow((Get-Process -Id $npPid).MainWindowHandle); Start-Sleep -Milliseconds 300
+  [void][K]::Key(0x11, 0x1D, $false, $false); [void][K]::Key(0x41, 0x1E, $false, $false); [void][K]::Key(0x41, 0x1E, $false, $true)
+  [void][K]::Key(0x43, 0x2E, $false, $false); [void][K]::Key(0x43, 0x2E, $false, $true); [void][K]::Key(0x11, 0x1D, $false, $true)
+  Start-Sleep -Milliseconds 600
+  $text = Get-Clipboard -Raw
+  Write-Host "[$name] Text in Notepad: $text"
+  if (-not $text -or $text -eq 'VORHER-1234') { Fail "[$name] kein Text in Notepad eingefügt" }
+  $miss = $Expect | Where-Object { $text -notmatch [regex]::Escape($_) }
+  if ($miss) { Fail "[$name] Text unvollständig, fehlt: $($miss -join ', ')" }
+  Ok "[$name] Text steht in Notepad"
+  Stop-Process -Id $npPid -Force -ErrorAction SilentlyContinue
+}
+
+Step 'Starte die installierte App (virtuelles Mikrofon) …'
+Start-Flow
 $arch = (Select-String -Path $log -Pattern 'starting \((win32-[a-z0-9]+)' | Select-Object -First 1).Matches.Groups[1].Value
 Ok "App läuft als $arch"
 
-# ── 3. Diktat in Notepad ──
-Set-Clipboard -Value 'VORHER-1234'
-$np = Start-Process notepad -PassThru
-$deadline = (Get-Date).AddSeconds(30)
-$npPid = 0
-while ((Get-Date) -lt $deadline) {
-  $w = Get-Process -Name notepad -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
-  if ($w) { [void][K]::SetForegroundWindow($w.MainWindowHandle); Start-Sleep -Milliseconds 400; if ([K]::ForegroundPid() -eq $w.Id) { $npPid = $w.Id; break } }
-  Start-Sleep -Milliseconds 300
+# ── 3a. Standard: rechte Strg ──
+Test-Dictation 'rechte Strg' { [void][K]::Key(0xA3, 0x1D, $true, $false) } { [void][K]::Key(0xA3, 0x1D, $true, $true) }
+
+# ── 3b. Alt Gr (Laptops mit Copilot- statt rechter Strg-Taste, z. B. Samsung Galaxy Book4/5) ──
+# Windows schickt bei Alt Gr erst ein unechtes linkes Strg (Scancode 0x21D), dann rechtes Alt.
+Stop-Flow
+$sf = Join-Path $data 'settings.json'
+$st = Get-Content $sf -Raw | ConvertFrom-Json
+$st.hotkey = 'RightAlt'
+$st | ConvertTo-Json -Depth 20 | Set-Content $sf -Encoding utf8
+Start-Flow
+Test-Dictation 'Alt Gr' {
+  [void][K]::Key(0xA2, 0x21D, $false, $false); [void][K]::Key(0xA5, 0x38, $true, $false)
+} {
+  [void][K]::Key(0xA2, 0x21D, $false, $true); [void][K]::Key(0xA5, 0x38, $true, $true)
 }
-if (-not $npPid) { Fail 'Notepad kommt nicht in den Vordergrund' }
-Ok 'Notepad im Vordergrund'
-
-$dur = [Math]::Ceiling((Get-Item $Wav).Length / 32000.0) + 1
-Step "Halte rechte Strg $dur s und spreche …"
-[void][K]::Key(0xA3, 0x1D, $true, $false)
-Start-Sleep -Seconds $dur
-[void][K]::Key(0xA3, 0x1D, $true, $true)
-
-$deadline = (Get-Date).AddSeconds(40)
-while ((Get-Date) -lt $deadline -and -not (Select-String -Path $log -Pattern 'dictation: ' -Quiet)) { Start-Sleep -Milliseconds 500 }
-$line = Select-String -Path $log -Pattern 'dictation: ' | Select-Object -Last 1
-if (-not $line) { Fail 'kein Diktat verarbeitet (Taste oder Mikrofon kam nicht an)' }
-Ok "Diktat verarbeitet: $($line.Line -replace '^.*dictation: ','')"
-Start-Sleep 2
-
-$clipAfter = Get-Clipboard -Raw
-if (($clipAfter -replace '\s+$','') -ne 'VORHER-1234') { Fail "Zwischenablage nicht wiederhergestellt (steht: '$clipAfter')" }
-Ok 'Zwischenablage danach wiederhergestellt'
-
-[void][K]::SetForegroundWindow((Get-Process -Id $npPid).MainWindowHandle); Start-Sleep -Milliseconds 300
-[void][K]::Key(0x11, 0x1D, $false, $false); [void][K]::Key(0x41, 0x1E, $false, $false); [void][K]::Key(0x41, 0x1E, $false, $true)
-[void][K]::Key(0x43, 0x2E, $false, $false); [void][K]::Key(0x43, 0x2E, $false, $true); [void][K]::Key(0x11, 0x1D, $false, $true)
-Start-Sleep -Milliseconds 600
-$text = Get-Clipboard -Raw
-Write-Host "Text in Notepad: $text"
-if (-not $text -or $text -eq 'VORHER-1234') { Fail 'kein Text in Notepad eingefügt' }
-$miss = $Expect | Where-Object { $text -notmatch [regex]::Escape($_) }
-if ($miss) { Fail "Text unvollständig, fehlt: $($miss -join ', ')" }
-Ok 'Text steht in Notepad'
 
 # ── 4. Aufräumen + Deinstallation ──
-Stop-Process -Id $npPid -Force -ErrorAction SilentlyContinue
-Stop-Process -Id $flow.Id -Force -ErrorAction SilentlyContinue
+Stop-Flow
 $un = Join-Path $env:LOCALAPPDATA 'Programs\Flow\Uninstall Flow.exe'
 if (Test-Path $un) { $u = Start-Process -FilePath $un -ArgumentList '/S' -Wait -PassThru; Start-Sleep 3; if (Test-Path $exe) { Fail 'Deinstallation lässt Flow.exe zurück' }; Ok 'Deinstallation sauber' }
 Write-Host '✓ GERÄTE-TEST BESTANDEN'

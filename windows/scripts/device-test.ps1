@@ -101,7 +101,14 @@ function Test-Dictation([string]$name, [scriptblock]$down, [scriptblock]$up) {
     if ($w) { Focus-Window $w.MainWindowHandle; Start-Sleep -Milliseconds 400; if ([K]::GetForegroundWindow() -eq $w.MainWindowHandle -or [K]::ForegroundPid() -eq $w.Id) { $npPid = $w.Id; break } }
     Start-Sleep -Milliseconds 300
   }
-  if (-not $npPid) { Get-Process | Where-Object { $_.MainWindowHandle -ne 0 } | ForEach-Object { Write-Host "  Fenster: $($_.ProcessName) '$($_.MainWindowTitle)'" }; Fail 'Notepad kommt nicht in den Vordergrund' }
+  $noDesk = $false
+  if (-not $npPid) {
+    Get-Process | Where-Object { $_.MainWindowHandle -ne 0 } | ForEach-Object { Write-Host "  Fenster: $($_.ProcessName) '$($_.MainWindowTitle)'" }
+    if ([K]::GetForegroundWindow() -ne [IntPtr]::Zero) { Fail 'Notepad kommt nicht in den Vordergrund' }
+    # CI-Rechner ohne aktiven Bildschirm (Windows-ARM-Runner): kein Fenster kann vorne sein → Einfügen-Ziel nicht prüfbar
+    Write-Host "  ⚠ kein aktiver Bildschirm (Vordergrundfenster = 0) – Notepad-Prüfung entfällt, Rest wird geprüft"
+    $noDesk = $true
+  }
   $before = @(Select-String -Path $log -Pattern 'dictation: ').Count
   $dur = [Math]::Ceiling((Get-Item $Wav).Length / 32000.0) + 1
   Step "[$name] halten $dur s und sprechen …"
@@ -115,6 +122,10 @@ function Test-Dictation([string]$name, [scriptblock]$down, [scriptblock]$up) {
   $clipAfter = Get-Clipboard -Raw
   if (($clipAfter -replace '\s+$','') -ne 'VORHER-1234') { Fail "[$name] Zwischenablage nicht wiederhergestellt (steht: '$clipAfter')" }
   Ok "[$name] Zwischenablage danach wiederhergestellt"
+  if ($noDesk) {
+    if (-not (Select-String -Path $log -Pattern 'paste|insert' -Quiet)) { Write-Host "  (Einfügen ins Leere, kein Ziel-Fenster)" }
+    Get-Process -Name notepad -ErrorAction SilentlyContinue | Stop-Process -Force; return
+  }
   Focus-Window (Get-Process -Id $npPid).MainWindowHandle; Start-Sleep -Milliseconds 300
   [void][K]::Key(0x11, 0x1D, $false, $false); [void][K]::Key(0x41, 0x1E, $false, $false); [void][K]::Key(0x41, 0x1E, $false, $true)
   [void][K]::Key(0x43, 0x2E, $false, $false); [void][K]::Key(0x43, 0x2E, $false, $true); [void][K]::Key(0x11, 0x1D, $false, $true)

@@ -115,6 +115,36 @@ jobs:
             windows/.cache/meeting-results.json
           if-no-files-found: ignore
 
+  device:
+    name: Gerätetest ${{ matrix.label }} – installieren, Strg halten, Diktat in Notepad
+    needs: windows
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, label: 'Windows x64' }
+          - { os: windows-11-arm, label: 'Windows 11 ARM (Snapdragon, x64-Emulation)' }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: Flow-Setup-windows-x64
+          path: windows/release
+      - name: Gerätetest (installierte App, echter Tastatur-Hook, echtes Einfügen)
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem release -Filter 'Flow-Setup-*.exe' | Select-Object -First 1
+          ./scripts/device-test.ps1 -Installer $setup.FullName
+      - name: Log hochladen
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flow-device-log-${{ matrix.os }}
+          path: ${{ runner.temp }}/flow-device-profile/logs/*.log
+          if-no-files-found: ignore
+
   macos:
     name: macOS – unit tests
     runs-on: macos-latest

@@ -80,6 +80,23 @@ if [ -n "$PREBUILT" ]; then
   if [ -x "$PREBUILT/../flow-cli" ]; then cp "$PREBUILT/../flow-cli" .build/flow-cli; fi
 else
   echo "» Baue Flow $VERSION ($GIT_DESC) …"
+  # Die reinen Command Line Tools haben die SwiftUI-Makros nicht („plugin for module 'SwiftUIMacros' not found“) –
+  # zeigt xcode-select dorthin und ist ein volles Xcode installiert, nimmt der Bau dieses (nur für diesen Lauf).
+  if [ -z "${DEVELOPER_DIR:-}" ]; then
+    _dev="$(xcode-select -p 2>/dev/null || true)"
+    _plug="Platforms/MacOSX.platform/Developer/usr/lib/swift/host/plugins/libSwiftUIMacros.dylib"
+    if [ ! -e "$_dev/$_plug" ] && [ ! -e "$_dev/usr/lib/swift/host/plugins/libSwiftUIMacros.dylib" ]; then
+      for _x in /Applications/Xcode.app /Applications/Xcode*.app "$HOME/Applications/Xcode.app"; do
+        if [ -e "$_x/Contents/Developer/$_plug" ]; then
+          export DEVELOPER_DIR="$_x/Contents/Developer"
+          echo "  (baue mit $(basename "$_x") – xcode-select zeigt auf ${_dev:-?}, dort fehlen die SwiftUI-Makros)"
+          break
+        fi
+      done
+    fi
+  fi
+  # Leerzeichen im Pfad (z. B. iCloud-„Dokumente – <Mac>“) kann swift build abbrechen lassen
+  case "$(pwd)" in *" "*) echo "⚠︎ Projektpfad enthält Leerzeichen ($(pwd)) – swift build kann daran scheitern. Besser z. B. nach ~/Developer verschieben.";; esac
   set +e
   swift build -c release > .build-log.txt 2>&1
   rc=$?
@@ -150,11 +167,80 @@ cat > "$STAGE/Contents/Info.plist" <<PL
       <key>LSHandlerRank</key><string>Alternate</string>
       <key>LSItemContentTypes</key><array><string>public.movie</string></array></dict>
   </array>
+  <key>CFBundleURLTypes</key><array><dict><key>CFBundleURLName</key><string>$BUNDLE_ID</string>
+    <key>CFBundleURLSchemes</key><array><string>flowdictation</string></array></dict></array>
   <key>NSCalendarsFullAccessUsageDescription</key><string>Flow zeigt dir im Notetaker deine heutigen Meetings und trägt per Sprachbefehl Termine ein („Termin Freitag 14 Uhr …“).</string>
 </dict></plist>
 PL
 
 sign_keychain_begin
+# Kontrollzentrum-Knopf „Bildschirm aufnehmen (Flow)“ (WidgetKit-Steuerelement, macOS 26) – optional:
+# klappt der Bau nicht (andere Werkzeuge), läuft Flow ganz normal ohne den Knopf (⌃⌥R geht immer).
+CTRL_SRC="Extensions/FlowControls/Controls.swift"
+CTRL_BIN=".build/flowcontrols/FlowControls"
+if [ -f "$CTRL_SRC" ]; then
+  mkdir -p "$(dirname "$CTRL_BIN")"
+  if [ ! -x "$CTRL_BIN" ] || [ "$CTRL_SRC" -nt "$CTRL_BIN" ] || [ build.sh -nt "$CTRL_BIN" ] || { [ ! -d .build/flowcontrols/meta/Metadata.appintents ] && [ -z "${FLOW_NO_APPINTENTS_TOOL:-}" ]; }; then
+    # Einstieg wie bei Xcode-Erweiterungen: _NSExtensionMain (mit dem normalen main beendet sich die Erweiterung sofort)
+    # + Swift-Konstanten für die AppIntents-Metadaten (ohne sie tut ein Druck auf den Knopf nichts: „action intent without linkAction“)
+    CTRL_DIR="$(pwd)/.build/flowcontrols"
+    rm -rf "$CTRL_DIR/meta"
+    xcrun swiftc -parse-as-library -target "$(uname -m)-apple-macos26.0" -O -wmo -module-name FlowControls "$CTRL_SRC" -o "$CTRL_BIN" \
+      -Xlinker -e -Xlinker _NSExtensionMain \
+      -emit-const-values -emit-const-values-path "$CTRL_DIR/Controls.swiftconstvalues" \
+      -Xfrontend -const-gather-protocols-file -Xfrontend "$(pwd)/Extensions/FlowControls/appintents-protocols.json" > "$CTRL_DIR/build.log" 2>&1 || rm -f "$CTRL_BIN"
+    TC="$(dirname "$(dirname "$(dirname "$(xcrun --find swiftc)")")")"   # …/XcodeDefault.xctoolchain
+    if [ -x "$CTRL_BIN" ] && [ -x "$TC/usr/bin/appintentsmetadataprocessor" ] && [ -z "${FLOW_NO_APPINTENTS_TOOL:-}" ]; then
+      echo "$(pwd)/$CTRL_SRC" > "$CTRL_DIR/src.list"; echo "$CTRL_DIR/Controls.swiftconstvalues" > "$CTRL_DIR/cv.list"
+      "$TC/usr/bin/appintentsmetadataprocessor" --output "$CTRL_DIR/meta" --toolchain-dir "$TC" --module-name FlowControls \
+        --sdk-root "$(xcrun --show-sdk-path)" --xcode-version "$(xcodebuild -version 2>/dev/null | tail -1 | awk '{print $3}')" \
+        --platform-family macOS --deployment-target 26.0 --target-triple "$(uname -m)-apple-macos26.0" \
+        --source-file-list "$CTRL_DIR/src.list" --swift-const-vals-list "$CTRL_DIR/cv.list" --binary-file "$CTRL_BIN" >> "$CTRL_DIR/build.log" 2>&1 || true
+    fi
+  fi
+  if [ -x "$CTRL_BIN" ]; then
+    EXT="$STAGE/Contents/PlugIns/FlowControls.appex"
+    mkdir -p "$EXT/Contents/MacOS"
+    cp "$CTRL_BIN" "$EXT/Contents/MacOS/FlowControls"
+    if [ -d .build/flowcontrols/meta/Metadata.appintents ]; then
+      mkdir -p "$EXT/Contents/Resources"; cp -R .build/flowcontrols/meta/Metadata.appintents "$EXT/Contents/Resources/"
+      # frisch erzeugte Fassung auch ins Repo (Macs ohne volles Xcode haben appintentsmetadataprocessor nicht) –
+      # NUR bei der Veröffentlichung (release.sh setzt FLOW_UPDATE_METADATA): sonst wäre das Repo nach jedem Bau „verändert“
+      if [ -n "${FLOW_UPDATE_METADATA:-}" ] && ! diff -rq .build/flowcontrols/meta/Metadata.appintents Extensions/FlowControls/Metadata.appintents >/dev/null 2>&1; then
+        rm -rf Extensions/FlowControls/Metadata.appintents; cp -R .build/flowcontrols/meta/Metadata.appintents Extensions/FlowControls/
+        echo "  (Extensions/FlowControls/Metadata.appintents aktualisiert – mit committen)"
+      fi
+    elif [ -d Extensions/FlowControls/Metadata.appintents ]; then
+      # nur Command Line Tools: mitgelieferte Metadaten aus dem Repo
+      mkdir -p "$EXT/Contents/Resources"; cp -R Extensions/FlowControls/Metadata.appintents "$EXT/Contents/Resources/"
+      echo "  (Kontrollzentrum-Knopf: AppIntents-Metadaten aus dem Repo – kein Xcode-Werkzeug auf diesem Mac)"
+    else
+      echo "⚠︎ Kontrollzentrum-Knopf ohne AppIntents-Metadaten (Druck darauf tut nichts) – .build/flowcontrols/build.log"
+    fi
+    cat > "$EXT/Contents/Info.plist" <<XPL
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleIdentifier</key><string>$BUNDLE_ID.controls</string>
+  <key>CFBundleExecutable</key><string>FlowControls</string>
+  <key>CFBundleName</key><string>FlowControls</string>
+  <key>CFBundleDisplayName</key><string>$APP_NAME</string>
+  <key>CFBundlePackageType</key><string>XPC!</string>
+  <key>CFBundleShortVersionString</key><string>$VERSION</string>
+  <key>CFBundleVersion</key><string>$BUILD_NO</string>
+  <key>LSMinimumSystemVersion</key><string>26.0</string>
+  <key>NSExtension</key><dict><key>NSExtensionPointIdentifier</key><string>com.apple.widgetkit-extension</string></dict>
+</dict></plist>
+XPL
+    if codesign --force --options runtime --entitlements Extensions/FlowControls/FlowControls.entitlements --sign "$SIGN_IDENTITY" "$EXT" 2>/dev/null; then
+      echo "✓ Kontrollzentrum-Knopf „Bildschirm aufnehmen (Flow)“ eingebaut"
+    else
+      rm -rf "$STAGE/Contents/PlugIns"; echo "⚠︎ Kontrollzentrum-Knopf nicht signiert – Flow läuft ohne ihn"
+    fi
+  else
+    echo "⚠︎ Kontrollzentrum-Knopf nicht gebaut (.build/flowcontrols/build.log) – Flow läuft ohne ihn"
+  fi
+fi
 if ! codesign --force --options runtime --entitlements voiceflow.entitlements --sign "$SIGN_IDENTITY" --identifier "$BUNDLE_ID" "$STAGE"; then
   echo "✗ Signieren fehlgeschlagen (Schlüsselbund gesperrt?) – die installierte App bleibt unverändert"; exit 1
 fi
@@ -199,5 +285,16 @@ set +e; inst_install_staged "$STAGE" "$VERSION" "$BUILD_NO"; rc=$?; set -e
 if [ -x .build/flow-cli ]; then
   mkdir -p "$DATA/bin"; chmod 700 "$DATA" "$DATA/bin" 2>/dev/null || true
   rm -f "$DATA/bin/flow"; cp .build/flow-cli "$DATA/bin/flow"; chmod 700 "$DATA/bin/flow"
+fi
+# Kontrollzentrum-Knopf: nach dem Tausch kennt macOS die Erweiterung nur noch unter dem ALTEN Pfad (jetzt
+# „….previous“) → „action intent without linkAction“, ein Druck tut nichts. Neu eintragen, alte abmelden, laufenden
+# Erweiterungs-Prozess DIESER App beenden (startet beim nächsten Öffnen des Kontrollzentrums aus der neuen App).
+if [ -d "$APP/Contents/PlugIns/FlowControls.appex" ]; then
+  LSREG=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+  pluginkit -r "${APP}.previous/Contents/PlugIns/FlowControls.appex" >/dev/null 2>&1 || true
+  "$LSREG" -u "${APP}.previous" >/dev/null 2>&1 || true
+  "$LSREG" -f -R "$APP" >/dev/null 2>&1 || true
+  pluginkit -a "$APP/Contents/PlugIns/FlowControls.appex" >/dev/null 2>&1 || true
+  pkill -f "$APP/Contents/PlugIns/FlowControls.appex/" >/dev/null 2>&1 || true
 fi
 echo "✓ Flow $VERSION läuft ($GIT_DESC). Vorige Fassung: ${APP}.previous (./update.sh --rollback)"

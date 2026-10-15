@@ -23,7 +23,9 @@ Signatur (`scripts/signing.sh`): `FLOW_SIGN_IDENTITY` → Identität der install
 Prüf-Befehle (nie die Dev-Binary im App-Modus starten – sie verweigert das ohne Bundle ohnehin):
 `.build/release/Flow --version`, `--setup-status`, `--prewarm-models`, `--render-onboarding <ordner>`,
 `--render-hub <ordner>`, `--pages-test`, `--selftest-agent-prompt`, `--agent-prompt-render <ordner>`,
-`--agent-prompt-detect "Text" [Sekunden] [Bundle-ID]`, `--agent-prompt-build <text|@datei> [--rules]` (echter Claude-Aufruf).
+`--agent-prompt-detect "Text" [Sekunden] [Bundle-ID]`, `--agent-prompt-build <text|@datei> [--rules]` (echter Claude-Aufruf),
+`--screen-rec-test` (Bildschirmaufnahme, reine Logik), `--screen-rec-render <ordner>` (Karten), `--screen-rec-probe <datei.mp4> [- glow]`
+(2 s echte Aufnahme ohne Ton), `--screen-rec-context <video> [system]` (Transkript + Schlüsselbilder für ein vorhandenes Video).
 Alle Selbsttests/Renders mit `FLOW_HOME=<leerer Ordner>`.
 
 ## Optionale Teile (Standard aus, ohne sie läuft alles andere)
@@ -59,8 +61,8 @@ anderes Präfix. Bericht: Terminal + `tests/last-release.txt`.
 | 1 Build | `swift build -c release`, frisches `--bundle-only`-Bundle (Signatur, Version), `git status` von `mac/` unverändert, Bash-Lint aller `mac/**/*.sh`, `FLOW_REPO_URL` in `flow.conf` = `install-mac.sh` |
 | 1b Update-Sicherheit | Staging-Prüfung, Zertifikat ≥ 30 Tage, `tests/lib/rollback_test.sh` (Schein-App), `--selftest-health` |
 | 2 CLI-Schutz | unbekannter Befehl = Exit 2, Binary ohne Bundle verweigert den App-Modus, `app.lock`, Selbsttests verweigern `~/.config/flow` |
-| 3 Wort-Lerner | `--selftest-learner`, `--selftest-mouse-target`, `--selftest-agent-prompt` (Auslöser, Erkennung, Regel-Rückfall, Schein-Claude, Verlauf, ohne Claude-CLI) |
-| 3b Oberfläche | Offscreen-Renders (Pille, Neu-Liste, Update-Karte, Agent-Prompt-Karten, Hub) |
+| 3 Wort-Lerner | `--selftest-learner`, `--selftest-mouse-target`, `--selftest-agent-prompt` (Auslöser, Erkennung, Regel-Rückfall, Schein-Claude, Verlauf, ohne Claude-CLI), `--screen-rec-test` (Bildschirmaufnahme) |
+| 3b Oberfläche | Offscreen-Renders (Pille, Neu-Liste, Update-Karte, Agent-Prompt-Karten, Aufnahme-Karten, Hub) |
 | 4 Erkennung | TTS-Testset `tests/audio/` (nur `say`, erfundene Namen) über `--engine-bench`, `--voicemask-bench`, `--dictation-sim` gegen `tests/baseline/recognition.json` |
 | 5 Sync + Teilen | lokaler `wrangler dev` mit `INIT_SECRET`, zwei Test-Geräte, Text/Bild/5-MB-Datei, Worker verweigert Tresor ohne Init-Geheimnis |
 | 6 Update-Weg | Temp-Remote auf dem letzten Tag, Klon „als Freund“ mit lokalen Änderungen, genau der Befehl des Updaters |
@@ -73,3 +75,19 @@ anderes Präfix. Bericht: Terminal + `tests/last-release.txt`.
 - Schritt 4 misst auch den Hybrid-Weg und braucht darum Whisper (`./setup.sh --with-whisper`). Schritt 5 braucht Node.js und `npm install` in `../clipvault/sync-worker`.
 - Signatur im Tor: ohne lokales Zertifikat legt `build.sh --bundle-only` eins an. Wer den Anmelde-Schlüsselbund nicht anfassen will: `FLOW_KEYCHAIN=<test.keychain-db> FLOW_KEYCHAIN_PASSWORD=… scripts/release.sh --dry-run` oder `FLOW_SIGN_IDENTITY=-`.
 - Testmodus von `build.sh`/`update.sh` (nur für das Tor): `FLOW_TEST_APP_DIR`, `FLOW_TEST_PREBUILT`.
+
+## Bildschirmaufnahme + Kontrollzentrum-Knopf
+
+Code: `Sources/Flow/VoiceFlow/ScreenRec/ScreenRec.swift` (ScreenCaptureKit + `SCRecordingOutput`, H.264-MP4; eigene Fenster
+per `SCContentFilter(excludingApplications:exceptingWindows:)` raus, nur das Maus-Leuchten bleibt drin). Auslöser: ⌃⌥R
+(`GlobalShortcut` id 3), Menüpunkt, Adresse `flowdictation://aufnahme`.
+
+Der Knopf liegt in `Extensions/FlowControls/` (WidgetKit-`ControlWidget`, Bundle-ID `app.flowdictation.flow.controls`) und
+wird von `build.sh` mit `swiftc` gebaut – **optional**: scheitert Bau oder Signatur, läuft Flow ohne ihn.
+- Einstieg `-Xlinker -e -Xlinker _NSExtensionMain` (sonst beendet sich die Erweiterung sofort).
+- Die Aktion braucht AppIntents-Metadaten (`appintentsmetadataprocessor` aus vollem Xcode). Macs mit nur Command Line
+  Tools nehmen die mitgelieferte Fassung `Extensions/FlowControls/Metadata.appintents`; neu geschrieben wird sie nur von
+  `scripts/release.sh` (`FLOW_UPDATE_METADATA=1`), `update.sh` setzt sie vor `git pull` zurück.
+- Nach dem Tausch trägt `build.sh` die App neu bei LaunchServices/pluginkit ein (sonst kennt macOS nur den alten Pfad).
+- Zeigt `xcode-select` auf die Command Line Tools (ohne SwiftUI-Makros) und ist ein volles Xcode installiert, baut
+  `build.sh` mit diesem (`DEVELOPER_DIR` nur für den Lauf).

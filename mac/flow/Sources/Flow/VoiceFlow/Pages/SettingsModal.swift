@@ -384,7 +384,7 @@ private struct NotetakerSection: View {
                 SToggle(isOn: $s.autoSummary).disabled(!ClaudeCLI.isAvailable).opacity(ClaudeCLI.isAvailable ? 1 : 0.45)
             }
             PGSettingRow(title: "Audio behalten", detail: "Nötig für „Neu auswerten“.") { SToggle(isOn: $s.keepAudio) }
-            PGSettingRow(title: "Kurzbefehl", detail: "⌃⌥M startet oder beendet eine Aufnahme. ⌃⌥S merkt einen Moment (Bildschirmfoto + die letzten 30 s).") { EmptyView() }
+            PGSettingRow(title: "Kurzbefehl", detail: "⌃⌥M startet oder beendet eine Aufnahme. ⌃⌥S merkt einen Moment (Bildschirmfoto + die letzten 30 s). ⌃⌥R nimmt den Bildschirm unter der Maus als Video auf (Ton wählbar).") { EmptyView() }
         }
         SCard(caption: "Audiodateien") { AudioImportSettingsRows() }
         SCard(caption: "Meeting-Kontext") {

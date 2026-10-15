@@ -18,9 +18,10 @@
 #   2 CLI-Schutz       unbekannter Befehl = Exit 2 · Binary ohne Bundle verweigert den App-Modus · app.lock · Test-Schutz
 #   3 Wort-Lerner      CorrectionLearner + AliasLearner (Fälle aus der Geschichte) · Maus-Ziel-Logik (--selftest-mouse-target) ·
 #                      Agent-Prompt (--selftest-agent-prompt: Auslöser, Erkennung, Regel-Rückfall, Schein-Claude, Verlauf, Original zuerst, ohne Claude-CLI,
-#                      Ersetzen beim „Einfügen“ mit Schein-Box/-Feld, „abgeschickt?“) · --agent-prompt-latency (Einfügen → Karte < 1 s)
+#                      Ersetzen beim „Einfügen“ mit Schein-Box/-Feld, „abgeschickt?“) · --agent-prompt-latency (Einfügen → Karte < 1 s) ·
+#                      Bildschirmaufnahme (--screen-rec-test: Ton-Wahl, Datei, Karten, Transkript-Sätze, Schlüsselbilder, Mausspur)
 #   3b Oberfläche      --pill-ring-render, --shared-inbox-render, --update-badge-render (+ Fehler-Karte), --agent-prompt-render
-#                      (alle Karten-Zustände) (+ --render-hub im vollen Lauf)
+#                      (alle Karten-Zustände), --screen-rec-render (Aufnahme-Karten) (+ --render-hub im vollen Lauf)
 #   4 Erkennung        TTS-Testset durch die echte Pipeline: WER/Namen (+1,5 Punkte), Latenz (+30 %), Stimmabgleich
 #   5 Sync + Teilen    lokaler wrangler dev, zwei Test-Geräte, Text/Bild/5-MB-Datei in beide Richtungen, grüner Punkt,
 #                      gemeinsame Namen (PartnerVocab), kein Klartext auf dem Server
@@ -32,6 +33,7 @@
 # Monorepo: dieses Skript liegt in mac/flow/scripts; geprüft und veröffentlicht wird nur der Mac-Teil (mac/ + .gitignore).
 # Mac-Tags heißen v<X.Y.Z> (Windows-Tags brauchen ein anderes Präfix, z. B. win-v…).
 set -euo pipefail
+export FLOW_UPDATE_METADATA=1   # nur die Veröffentlichung schreibt Extensions/FlowControls/Metadata.appintents ins Repo
 cd "$(dirname "$0")/.."
 SRC="$(pwd)"
 ROOT="$(git rev-parse --show-toplevel)"
@@ -290,6 +292,14 @@ if [ $BUILD_OK -eq 1 ]; then
   lo="$(FLOW_HOME="$T/h-aplat" with_timeout 60 "$BIN" --agent-prompt-latency 2>&1)"; rc=$?
   set -e
   check "$rc" "Agent-Prompt-Vorschlag: Einfügen → Karte < 1 s (--agent-prompt-latency)" "$(echo "$lo" | grep '^NACHHER' | sed 's/^NACHHER *//')"
+  # Bildschirmaufnahme: reine Logik (Ton-Wahl → Konfiguration, Dateiname/Ordner, Karten, Sätze, Schlüsselbilder,
+  # Mausspur-Striche) – nimmt nichts auf, < 5 s
+  set +e
+  so="$(FLOW_HOME="$T/h-screenrec" with_timeout 60 "$BIN" --screen-rec-test 2>&1)"; rc=$?
+  set -e
+  echo "$so" > "$T/screen-rec.out"
+  check "$rc" "Bildschirmaufnahme (--screen-rec-test)" "$(echo "$so" | tail -1)"
+  { echo "$so" | grep "FEHLER" || true; } | while IFS= read -r l; do row FAIL "Bildschirmaufnahme: $(echo "$l" | sed 's/^ *FEHLER *//')"; done
   sweep
   step_end
 else
@@ -315,6 +325,11 @@ if [ $BUILD_OK -eq 1 ]; then
   bad=""
   for f in 1_vorschlag 1b_vorschlag_verblasst 2b_baut_live 3a_fertig 3c_fertig_original 3f_fertig_abgeschickt 4a_abgebrochen 4b_fehlgeschlagen 6_hub_prompts 7b_ohne_claude_fertig; do png_ok "$RD/agent-prompt/$f.png" || bad="$bad $f"; done
   check "$([ $rc -eq 0 ] && [ -z "$bad" ] && echo 0 || echo 1)" "--agent-prompt-render: Karten-Zustände + Hub" "exit ${rc}, $(ls "$RD/agent-prompt"/*.png 2>/dev/null | wc -l | tr -d ' ') Bilder${bad:+, fehlen/leer:${bad}}"
+  # Bildschirmaufnahme: Karte „Bildschirm aufnehmen“ (Ton-Chips, Schalter) + „Aufnahme fertig“
+  set +e; FLOW_HOME="$RD/h" CLIPVAULT_HOME="$RD/cv" with_timeout 60 "$BIN" --screen-rec-render "$RD/aufnahme" > "$RD/aufnahme.log" 2>&1; rc=$?; set -e
+  bad=""
+  for f in 1_bereit 2_fertig; do png_ok "$RD/aufnahme/$f.png" || bad="$bad $f"; done
+  check "$([ $rc -eq 0 ] && [ -z "$bad" ] && echo 0 || echo 1)" "--screen-rec-render: Aufnahme-Karten" "exit ${rc}${bad:+, fehlen/leer:${bad}}"
   if [ $QUICK -eq 0 ]; then
     set +e; FLOW_HOME="$RD/h" CLIPVAULT_HOME="$RD/cv" with_timeout 240 "$BIN" --render-hub "$RD/hub" demo > "$RD/hub.log" 2>&1; rc=$?; set -e
     n="$(ls "$RD/hub"/*.png 2>/dev/null | wc -l | tr -d ' ')"; bad=""

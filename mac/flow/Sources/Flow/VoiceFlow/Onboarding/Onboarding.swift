@@ -224,6 +224,7 @@ struct OnboardingOverlay: View {
                     tip("fn", "halten, sprechen, loslassen")
                     tip("fn fn", "doppelt tippen = freihändig")
                     tip("⌃⌥M", "Meeting mitschreiben")
+                    tip("⌃⌥R", "Bildschirm aufnehmen (den unter der Maus)")
                 }
                 .padding(.top, 24)
                 if !perms.allRequired {

@@ -34,11 +34,27 @@ struct VFNotice {
     var onClose: (() -> Void)? = nil
     /// Auswahl-Chips (z. B. Schreibweisen beim Wort-Lernen). Der erste ist vorgewählt; `VFNotify.shared.chosen` liefert die Wahl.
     var choices: [String] = []
+    /// Vorgewählter Chip (Index in `choices`), z. B. die zuletzt benutzte Ton-Wahl bei der Bildschirmaufnahme
+    var preselect = 0
+    /// Ein/Aus-Schalter in eigener Zeile unter den Chips (z. B. „Maus leuchtet“ bei der Bildschirmaufnahme)
+    var toggle: VFNoticeToggle? = nil
     /// Art-Marke über dem Text (z. B. „Auftrag für deinen Agent“ beim Geteilten) – Text ist dann die Kernaussage
     var chip: VFNoticeChip? = nil
+    /// Kleine Vorschaubilder unter dem Text (z. B. das Video bei „Aufnahme fertig“) – bis 6 Stück, dazu „+N“
+    var thumbnails: [URL] = []
+    var thumbnailMore = 0
+    /// Zeile unter der Leiste (z. B. Video-Name mit Endung)
+    var thumbnailCaption: String? = nil
 }
 
 /// Kleine farbige Marke in der Karte (Symbol + Wort)
+/// Ein/Aus-Schalter in der Karte (Zustand: `VFNotify.shared.currentToggle` / `chosenToggle`)
+struct VFNoticeToggle {
+    var label: String
+    var symbol: String
+    var on: Bool
+}
+
 struct VFNoticeChip {
     var label: String
     var symbol: String
@@ -112,7 +128,7 @@ final class VFNotify {
         else { n.illustration = pickVariant(n.illustration) }
         // Gleiche ID sichtbar → Inhalt austauschen statt doppelt zeigen
         if current?.id == n.id, !closing, let m = model {
-            if m.notice.choices != n.choices { m.selected = 0 }
+            if m.notice.choices != n.choices { m.selected = n.choices.indices.contains(n.preselect) ? n.preselect : 0 }
             current = n
             let lay = VFNotify.layout(for: n, pill: resolvePill(n))
             m.notice = n
@@ -159,6 +175,8 @@ final class VFNotify {
         closing = false
         let lay = VFNotify.layout(for: n, pill: resolvePill(n))
         let m = VFNotifyModel(notice: n, layout: lay)
+        if n.choices.indices.contains(n.preselect) { m.selected = n.preselect }
+        m.toggleOn = n.toggle?.on ?? false
         m.onPrimary = { [weak self] in self?.fire(\.primary) }
         m.onSecondary = { [weak self] in self?.fire(\.secondary) }
         m.onClose = { [weak self] in self?.close(reason: .xOrTimeout) }
@@ -183,9 +201,21 @@ final class VFNotify {
     /// Zuletzt gewählter Chip (gesetzt direkt bevor die Knopf-Aktion läuft)
     private(set) var chosen: String?
 
+    /// Schalter der sichtbaren Karte (nil = Karte hat keinen)
+    var currentToggle: Bool? { current?.toggle == nil ? nil : model?.toggleOn }
+    /// Schalter-Zustand beim letzten Knopf-Klick
+    private(set) var chosenToggle: Bool?
+
+    /// Gerade markierter Chip der sichtbaren Karte (z. B. ⌃⌥R ein zweites Mal = mit dieser Wahl starten)
+    var currentChoice: String? {
+        guard let n = current, let m = model, n.choices.indices.contains(m.selected) else { return nil }
+        return n.choices[m.selected]
+    }
+
     private func fire(_ kp: KeyPath<VFNotice, (String, () -> Void)?>) {
         guard let n = current, !closing else { return }
         chosen = n.choices.indices.contains(model?.selected ?? 0) ? n.choices[model?.selected ?? 0] : nil
+        chosenToggle = n.toggle == nil ? nil : model?.toggleOn
         let action = n[keyPath: kp]?.1
         close(reason: .button)
         action?()
@@ -271,8 +301,15 @@ final class VFNotify {
         let chrome: CGFloat = 22 + 18 + tileSize + 14 + 4   // links + Abstand + Kachel + rechts + Luft
         var chips: CGFloat = 0
         if n.choices.count > 1 { chips = n.choices.map { min(w($0, .medium), 180) + 26 }.reduce(0, +) + CGFloat(n.choices.count - 1) * 6 }
-        let width = min(maxCardWidth, max(minCardWidth, max(buttons, chips) + chrome))
-        return NSSize(width: width, height: cardHeight + (n.choices.count > 1 ? chipRow : 0) + (n.chip != nil ? kindRow : 0))
+        // Vorschaubilder-Leiste: 6 Kacheln + „+N“ müssen in die Textspalte passen
+        let thumbs: CGFloat = n.thumbnails.isEmpty ? 0
+            : CGFloat(n.thumbnails.count) * (VFThumbStrip.size + 5) + (n.thumbnailMore > 0 ? VFThumbStrip.size + 11 : 0)
+        // Schalter: Symbol + Text + Schiebeschalter + Ränder (12 + 12 + 7 + Text + 7 + 30 + 6) + etwas Luft
+        let toggle: CGFloat = n.toggle.map { w($0.label, .medium) + 82 } ?? 0
+        let width = min(maxCardWidth, max(minCardWidth, max(buttons, chips, thumbs, toggle) + chrome))
+        return NSSize(width: width, height: cardHeight + (n.choices.count > 1 ? chipRow : 0) + (n.toggle != nil ? chipRow : 0) + (n.chip != nil ? kindRow : 0)
+                                     + (n.thumbnails.isEmpty ? 0 : VFThumbStrip.height)
+                                     + VFThumbStrip.captionHeight(n.thumbnailCaption))
     }
 
     static func layout(for n: VFNotice, pill: NSRect) -> Layout {
@@ -344,6 +381,8 @@ final class VFNotify {
         _ = NSApplication.shared
         let lay = layout(for: n, pill: pill, visible: screen, frame: screen)
         let m = VFNotifyModel(notice: n, layout: lay)
+        if n.choices.indices.contains(n.preselect) { m.selected = n.preselect }
+        m.toggleOn = n.toggle?.on ?? false
         m.progress = progress
         let root = ZStack(alignment: .topLeading) {
             Color(nsColor: background)
@@ -510,6 +549,8 @@ final class VFNotifyModel: ObservableObject {
     @Published var hovering = false
     /// Gewählter Chip (Index in `notice.choices`)
     @Published var selected = 0
+    /// Zustand des Schalters (VFNotice.toggle)
+    @Published var toggleOn = false
     var onPrimary: () -> Void = {}
     var onSecondary: () -> Void = {}
     var onClose: () -> Void = {}
@@ -649,6 +690,13 @@ struct VFNotifyCardContent: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.top, 5)
                 }
+                if !n.thumbnails.isEmpty {
+                    VFThumbStrip(urls: n.thumbnails, more: n.thumbnailMore)
+                    if let c = n.thumbnailCaption {
+                        Text(c).font(.system(size: 11.5)).foregroundStyle(.white.opacity(0.6))
+                            .lineLimit(2).truncationMode(.tail).fixedSize(horizontal: false, vertical: true).padding(.top, 5)
+                    }
+                }
                 if n.choices.count > 1 {
                     HStack(spacing: 6) {
                         ForEach(Array(n.choices.enumerated()), id: \.offset) { i, c in
@@ -669,6 +717,30 @@ struct VFNotifyCardContent: View {
                         }
                     }
                     .padding(.top, 10)
+                }
+                if let tg = n.toggle {
+                    let on = model.toggleOn
+                    Button { model.toggleOn.toggle() } label: {
+                        HStack(spacing: 7) {
+                            Image(systemName: tg.symbol).font(.system(size: 12, weight: .semibold))
+                            Text(tg.label).font(.system(size: 13, weight: .medium)).lineLimit(1).fixedSize()
+                            // kleiner Schiebeschalter
+                            ZStack(alignment: on ? .trailing : .leading) {
+                                Capsule().fill(on ? Color(red: 1, green: 0.78, blue: 0.25) : Color.white.opacity(0.18)).frame(width: 30, height: 17)
+                                Circle().fill(.white).frame(width: 13, height: 13).padding(.horizontal, 2)
+                            }
+                            .animation(.spring(response: 0.25, dampingFraction: 0.8), value: on)
+                        }
+                        .foregroundStyle(on ? .white : .white.opacity(0.66))
+                        .padding(.leading, 12).padding(.trailing, 6)
+                        .frame(height: 28)
+                        .background(Capsule().fill(Color.white.opacity(on ? 0.12 : 0.06)))
+                        .overlay(Capsule().strokeBorder(Color.white.opacity(on ? 0.4 : 0.12), lineWidth: 1))
+                        .clipShape(Capsule())
+                        .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, 8)
                 }
                 Spacer(minLength: 8)
                 if n.primary != nil || n.secondary != nil {
@@ -769,5 +841,43 @@ private struct VFPressStyle: ButtonStyle {
                 .scaleEffect(configuration.isPressed ? 0.97 : 1)
                 .onHover { hover = $0 }
         }
+    }
+}
+
+// MARK: - Vorschaubilder-Leiste in der Karte (bis 6, dann „+N“)
+
+struct VFThumbStrip: View {
+    let urls: [URL]
+    let more: Int
+    static let size: CGFloat = 36
+    static let height: CGFloat = 46        // Leiste + Abstand nach oben
+    /// Namenszeile(n) darunter: eine Zeile, ab ~46 Zeichen zwei
+    static func captionHeight(_ c: String?) -> CGFloat { c.map { $0.count > 46 ? 34 : 19 } ?? 0 }
+
+    var body: some View {
+        HStack(spacing: 5) {
+            ForEach(Array(urls.enumerated()), id: \.offset) { _, u in
+                ZStack {
+                    Color.white.opacity(0.08)
+                    if let img = NSImage(contentsOf: u) {
+                        Image(nsImage: img).resizable().interpolation(.high).aspectRatio(contentMode: .fill)
+                    } else {
+                        Image(nsImage: NSWorkspace.shared.icon(forFile: u.path)).resizable().aspectRatio(contentMode: .fit).padding(4)
+                    }
+                }
+                .frame(width: Self.size, height: Self.size)
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Color.white.opacity(0.14), lineWidth: 1))
+            }
+            if more > 0 {
+                Text("+\(more)")
+                    .font(.system(size: 12.5, weight: .semibold)).monospacedDigit()
+                    .foregroundStyle(.white.opacity(0.85))
+                    .frame(minWidth: Self.size).frame(height: Self.size)
+                    .padding(.horizontal, 3)
+                    .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.white.opacity(0.10)))
+            }
+        }
+        .padding(.top, 10)
     }
 }

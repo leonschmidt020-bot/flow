@@ -301,6 +301,8 @@ enum CLI {
             ("v1_seite_ruhe", .idle, 0, false), ("v2_seite_sprechen", .listening, 0.85, false), ("v3_seite_freihand", .handsFree, 0.6, false),
             ("v4_seite_meeting", .meeting(start: Date()), 0.6, false),
             ("10_agent_prompt", .agentPrompt, 0, false),
+            ("11_aufnahme_countdown", .screenRecCountdown(3), 0, false), ("12_aufnahme_laeuft", .screenRec(start: Date().addingTimeInterval(-83)), 0, false),
+            ("v5_seite_aufnahme", .screenRec(start: Date()), 0, false), ("13_aufnahme_hover", .screenRec(start: Date().addingTimeInterval(-13)), 0, true), ("v6_seite_aufnahme_hover", .screenRec(start: Date().addingTimeInterval(-13)), 0, true),
         ]
         for (name, mode, lv, hover) in states {
             let win = NSWindow(contentRect: NSRect(x: 1000, y: 500, width: 460, height: 150), styleMask: [.borderless], backing: .buffered, defer: false)

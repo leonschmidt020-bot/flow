@@ -14,6 +14,9 @@ final class PillView: NSView {
         /// Agent-Prompt wird gebaut (Karte daneben zeigt den Fortschritt)
         case agentPrompt
         case loading(Double)
+        /// Bildschirmaufnahme (ScreenRec): Countdown 3 · 2 · 1, dann Aufnahme läuft (Klick = Stopp)
+        case screenRecCountdown(Int)
+        case screenRec(start: Date)
     }
 
     var mode: Mode = .idle { didSet { if mode != oldValue { modeChangedAt = Date(); wake() } } }
@@ -45,6 +48,8 @@ final class PillView: NSView {
     var allVoices: Bool { get { !Settings.shared.onlyMyVoice } set { wake() } }
     var onQuestionDismiss: (() -> Void)?
     var onMeetingClick: (() -> Void)?
+    /// Klick auf die Pille während einer Bildschirmaufnahme / eines Countdowns (Stopp bzw. Abbrechen)
+    var onScreenRecClick: (() -> Void)?
     var onDragEnd: ((NSPoint) -> Void)?
     var menuProvider: (() -> NSMenu)?
 
@@ -78,6 +83,7 @@ final class PillView: NSView {
         switch mode {
         case .prompt, .loading, .question: return false
         case .idle: return !hover   // Weltkugel immer aufrecht
+        case .screenRec: return !hover   // beim Drüberfahren waagerecht: „■ Beenden“ lesbar
         default: return true
         }
     }
@@ -114,6 +120,8 @@ final class PillView: NSView {
         case .prompt(let s): return NSSize(width: min(440, textWidth(s, size: 12, weight: .medium) + 162), height: 34)
         case .question(let s, let b): return NSSize(width: min(540, textWidth(s, size: 12, weight: .medium) + textWidth(b, size: 11.5, weight: .semibold) + 94), height: 34)
         case .loading: return NSSize(width: 176, height: 28)
+        case .screenRecCountdown: return NSSize(width: 66, height: 26)
+        case .screenRec: return hover ? NSSize(width: 168, height: 30) : NSSize(width: 118, height: 26)
         }
     }
 
@@ -141,7 +149,7 @@ final class PillView: NSView {
         let settled = abs(ts.width - w) < 0.3 && abs(ts.height - h) < 0.3 && abs(targetAlpha - alpha) < 0.01
         let animatedMode: Bool
         switch mode {
-        case .listening, .handsFree, .transcribing, .meeting, .command, .commandWorking, .agentPrompt: animatedMode = true
+        case .listening, .handsFree, .transcribing, .meeting, .command, .commandWorking, .agentPrompt, .screenRecCountdown, .screenRec: animatedMode = true
         default: animatedMode = false   // Ruhe, Fragen, Laden: stehen still → kein Dauer-Neuzeichnen
         }
         if settled && !animatedMode && Date() > toastUntil && !hover {
@@ -150,22 +158,40 @@ final class PillView: NSView {
     }
 
     /// Mittelpunkt der Kapsel in View-Koordinaten, am Bildschirmrand eingeklemmt.
-    private func capsuleCenter() -> NSPoint {
+    private func capsuleCenter() -> NSPoint { capsuleCenter(for: effSize) }
+
+    private func capsuleCenter(for e: NSSize) -> NSPoint {
         guard let win = window else { return NSPoint(x: bounds.midX, y: bounds.midY) }
         var c = anchor
         if screenRect.width > 0 {
-            let mx = effSize.width / 2 + 6, my = effSize.height / 2 + 6
+            let mx = e.width / 2 + 6, my = e.height / 2 + 6
             c.x = min(max(c.x, screenRect.minX + mx), screenRect.maxX - mx)
             c.y = min(max(c.y, screenRect.minY + my), screenRect.maxY - my)
         }
         return NSPoint(x: c.x - win.frame.minX, y: c.y - win.frame.minY)
     }
 
-    var capsuleRectInScreen: NSRect {
+    /// Kapsel einer bestimmten Größe (so wie sie gezeichnet würde) in Bildschirmkoordinaten
+    private func rectInScreen(for e: NSSize) -> NSRect {
         guard let win = window else { return .zero }
-        let c = capsuleCenter()
-        let e = effSize
+        let c = capsuleCenter(for: e)
         return NSRect(x: c.x - e.width / 2 + win.frame.minX, y: c.y - e.height / 2 + win.frame.minY, width: e.width, height: e.height)
+    }
+
+    var capsuleRectInScreen: NSRect { rectInScreen(for: effSize) }
+
+    /// Fangbereich rund um die Kapsel (Kapsel ± 6 pt)
+    static let hitMargin: CGFloat = 6
+
+    /// Liegt die Maus über der Pille? Während einer Bildschirmaufnahme mit Hysterese: beim Drüberfahren wird die
+    /// Pille breiter (und dreht sich am Seitenrand waagerecht) – wer drauf war, bleibt drauf, bis er sie wirklich
+    /// verlässt (sonst flackert „■ Beenden“ an und aus).
+    func hoverZoneContains(_ m: NSPoint) -> Bool {
+        if capsuleRectInScreen.insetBy(dx: -Self.hitMargin, dy: -Self.hitMargin).contains(m) { return true }
+        guard hover, case .screenRec = mode else { return false }
+        let rest = rectInScreen(for: vertical ? NSSize(width: 26, height: 118) : NSSize(width: 118, height: 26))
+        let wide = rectInScreen(for: NSSize(width: 168, height: 30))
+        return rest.insetBy(dx: -Self.hitMargin, dy: -Self.hitMargin).contains(m) || wide.insetBy(dx: -Self.hitMargin, dy: -Self.hitMargin).contains(m)
     }
 
     // MARK: Zeichnen
@@ -339,6 +365,10 @@ final class PillView: NSView {
             x.move(to: NSPoint(x: dx.x - 3.5, y: dx.y + 3.5)); x.line(to: NSPoint(x: dx.x + 3.5, y: dx.y - 3.5))
             x.lineWidth = 1.6; x.lineCapStyle = .round
             white.withAlphaComponent(0.8 * alpha).setStroke(); x.stroke()
+        case .screenRecCountdown(let n):
+            drawScreenRecCountdown(n, r: r, c: c, alpha: alpha)
+        case .screenRec(let start):
+            drawScreenRec(start: start, r: r, c: c, t: t, alpha: alpha)
         case .loading(let p):
             let label = p > 0.001 && p < 0.999 ? "Sprachmodell lädt · \(Int(p * 100)) %" : "Sprachmodell startet …"
             drawText(label, at: NSPoint(x: c.x, y: c.y + 2), size: 11, weight: .medium, mono: false, color: white, alignLeft: false)
@@ -372,6 +402,92 @@ final class PillView: NSView {
             drawText(tt, at: NSPoint(x: tr.midX, y: tr.midY), size: 11.5, weight: .medium, mono: false,
                      color: NSColor.white.withAlphaComponent(a), alignLeft: false)
         }
+    }
+
+    // MARK: Bildschirmaufnahme
+
+    /// Countdown: große Ziffer springt bei jedem Wechsel auf (Feder), roter Ring läuft rund um die Kapsel ab.
+    private func drawScreenRecCountdown(_ n: Int, r: NSRect, c: NSPoint, alpha: CGFloat) {
+        let since = CGFloat(Date().timeIntervalSince(modeChangedAt))
+        let frac = max(0, 1 - since)                 // jede Ziffer steht 1 s
+        let ring = NSBezierPath(roundedRect: r.insetBy(dx: 1, dy: 1), xRadius: r.height / 2 - 1, yRadius: r.height / 2 - 1)
+        ring.lineWidth = 2
+        NSColor.white.withAlphaComponent(0.14 * alpha).setStroke(); ring.stroke()
+        let len = Self.perimeter(r.insetBy(dx: 1, dy: 1))
+        ring.setLineDash([len * frac, len], count: 2, phase: 0)
+        ring.lineCapStyle = .round
+        NSColor.systemRed.withAlphaComponent(alpha).setStroke(); ring.stroke()
+        // Ziffer: federt von 1,6× auf 1×, blendet dabei ein
+        let pop = since < 0.35 ? 1 + 0.6 * pow(1 - since / 0.35, 2) * cos(since * 18) : 1
+        let a = min(1, since / 0.12 + 0.25) * alpha
+        let size = 14 * pop
+        drawText("\(n)", at: NSPoint(x: c.x, y: c.y), size: size, weight: .bold, mono: true,
+                 color: NSColor.white.withAlphaComponent(a), alignLeft: false)
+    }
+
+    /// Aufnahme läuft: pulsierender roter Punkt, Laufzeit, Stopp-Knopf; ein roter Lichtschweif kreist um die
+    /// Kapsel und der Rand glüht im Takt – auf der Aufnahme selbst ist die Pille nicht zu sehen (eigene App ausgeschlossen).
+    private func drawScreenRec(start: Date, r: NSRect, c: NSPoint, t: CGFloat, alpha: CGFloat) {
+        let breathe = 0.5 + 0.5 * sin(t * 3.2)
+        // Glühender Rand
+        NSGraphicsContext.current?.saveGraphicsState()
+        let glow = NSShadow()
+        glow.shadowColor = NSColor.systemRed.withAlphaComponent((0.35 + 0.35 * breathe) * alpha)
+        glow.shadowBlurRadius = 6 + 4 * breathe
+        glow.shadowOffset = .zero
+        glow.set()
+        let edge = NSBezierPath(roundedRect: r.insetBy(dx: 0.75, dy: 0.75), xRadius: r.height / 2 - 0.75, yRadius: r.height / 2 - 0.75)
+        edge.lineWidth = 1.2
+        NSColor.systemRed.withAlphaComponent((0.45 + 0.3 * breathe) * alpha).setStroke(); edge.stroke()
+        NSGraphicsContext.current?.restoreGraphicsState()
+        // Kreisender Lichtschweif (heller Kopf, ausblendender Schwanz)
+        let len = Self.perimeter(r.insetBy(dx: 0.75, dy: 0.75))
+        let head = (t * 70).truncatingRemainder(dividingBy: len)
+        for i in 0..<6 {
+            let seg = len * 0.05
+            let p = NSBezierPath(roundedRect: r.insetBy(dx: 0.75, dy: 0.75), xRadius: r.height / 2 - 0.75, yRadius: r.height / 2 - 0.75)
+            p.lineWidth = 1.8; p.lineCapStyle = .round
+            p.setLineDash([seg, len - seg], count: 2, phase: -(head - CGFloat(i) * seg * 0.8))
+            NSColor(calibratedRed: 1, green: 0.42 + 0.08 * CGFloat(i), blue: 0.38, alpha: (1 - CGFloat(i) / 6) * 0.95 * alpha).setStroke()
+            p.stroke()
+        }
+        // ● Aufnahme-Punkt (pulsiert, mit Ring der nach außen läuft)
+        let dc = NSPoint(x: r.minX + 15, y: c.y)
+        let ripple = (t * 0.9).truncatingRemainder(dividingBy: 1)
+        NSColor.systemRed.withAlphaComponent((1 - ripple) * 0.55 * alpha).setStroke()
+        let rp = NSBezierPath(ovalIn: NSRect(x: dc.x - 4 - 5 * ripple, y: dc.y - 4 - 5 * ripple, width: 8 + 10 * ripple, height: 8 + 10 * ripple))
+        rp.lineWidth = 1.2; rp.stroke()
+        NSColor.systemRed.withAlphaComponent((0.75 + 0.25 * breathe) * alpha).setFill()
+        NSBezierPath(ovalIn: NSRect(x: dc.x - 4.5, y: dc.y - 4.5, width: 9, height: 9)).fill()
+        // Laufzeit
+        let sec = max(0, Int(Date().timeIntervalSince(start)))
+        let label = sec >= 3600 ? String(format: "%d:%02d:%02d", sec / 3600, sec / 60 % 60, sec % 60) : String(format: "%d:%02d", sec / 60, sec % 60)
+        drawText(label, at: NSPoint(x: r.minX + 28, y: c.y), size: 12, weight: .semibold, mono: true,
+                 color: NSColor.white.withAlphaComponent(0.95 * alpha), alignLeft: true)
+        // ■ Stopp – beim Drüberfahren als roter Knopf „■ Beenden“ (Klick irgendwo auf die Pille beendet)
+        if hover && r.width > 150 {
+            let bw: CGFloat = 78, bh: CGFloat = r.height - 8
+            let br = NSRect(x: r.maxX - 4 - bw, y: c.y - bh / 2, width: bw, height: bh)
+            stopRect = br
+            NSColor.systemRed.withAlphaComponent(alpha).setFill()
+            NSBezierPath(roundedRect: br, xRadius: bh / 2, yRadius: bh / 2).fill()
+            NSColor.white.withAlphaComponent(alpha).setFill()
+            NSBezierPath(roundedRect: NSRect(x: br.minX + 11, y: c.y - 3.5, width: 7, height: 7), xRadius: 1.5, yRadius: 1.5).fill()
+            drawText("Beenden", at: NSPoint(x: br.minX + 24, y: c.y), size: 11.5, weight: .semibold, mono: false,
+                     color: NSColor.white.withAlphaComponent(alpha), alignLeft: true)
+        } else {
+            let sx = NSPoint(x: r.maxX - 15, y: c.y)
+            stopRect = NSRect(x: sx.x - 12, y: sx.y - 12, width: 24, height: 24)
+            NSColor.white.withAlphaComponent(0.16 * alpha).setFill()
+            NSBezierPath(ovalIn: NSRect(x: sx.x - 9, y: sx.y - 9, width: 18, height: 18)).fill()
+            NSColor.white.withAlphaComponent(0.95 * alpha).setFill()
+            NSBezierPath(roundedRect: NSRect(x: sx.x - 3.5, y: sx.y - 3.5, width: 7, height: 7), xRadius: 1.5, yRadius: 1.5).fill()
+        }
+    }
+
+    static func perimeter(_ r: NSRect) -> CGFloat {
+        let rad = min(r.width, r.height) / 2
+        return 2 * (r.width - 2 * rad) + 2 * (r.height - 2 * rad) + 2 * .pi * rad
     }
 
     private func drawBars(center c: NSPoint, count: Int, maxH: CGFloat, t: CGFloat, level: CGFloat, color: NSColor,
@@ -464,6 +580,8 @@ final class PillView: NSView {
             if acceptRect.contains(p) { onQuestionAccept?() } else if dismissRect.contains(p) { onQuestionDismiss?() }
         case .meeting:
             onMeetingClick?()
+        case .screenRec, .screenRecCountdown:
+            onScreenRecClick?()
         case .idle:
             if hover { onLanguageClick?() } else { onClick?() }
         case .listening:
@@ -576,14 +694,17 @@ final class PillController {
 
     private func poll() {
         let m = NSEvent.mouseLocation
-        let hit = view.capsuleRectInScreen.insetBy(dx: -6, dy: -6).contains(m)
+        let hit = view.hoverZoneContains(m)
         let dragging = NSEvent.pressedMouseButtons & 1 == 1 && !panel.ignoresMouseEvents
         if panel.ignoresMouseEvents == hit || dragging { panel.ignoresMouseEvents = !(hit || dragging) }
         view.setHover(hit)
-        // In Ruhe und während eines Meetings wandert die Pille mit auf den anderen Bildschirm.
-        if !pinnedToScreen && !dragging {
+        // Die Pille wandert mit auf den anderen Bildschirm – in Ruhe, im Meeting, bei der Bildschirmaufnahme und
+        // auch WÄHREND des Diktats (der Text geht ohnehin ins fokussierte Fenster; vorher blieb die Pille auf dem
+        // Bildschirm stehen, auf dem das Diktat begann, und war nach dem Wechseln nicht mehr zu sehen).
+        if !dragging {
             switch view.mode {
-            case .idle, .meeting: reposition()
+            case .idle, .meeting, .screenRec, .screenRecCountdown: if !pinnedToScreen { reposition() }
+            case .listening, .handsFree, .transcribing: reposition()   // Befehls-/Agent-Modus nicht: dort hängt eine Karte an der Pille
             default: break
             }
         }

@@ -14,7 +14,7 @@ enum CVDev {
             return render(dir: args.count > 2 ? args[2] : NSTemporaryDirectory() + "cv_render", demo: args.contains("demo"))
         case "--cv-test": return selfTest()
         case "--cv-ping": return ping()
-        default: return CVPickDev.run(args) ?? SharedInboxDev.run(args)
+        default: return CVPickDev.run(args) ?? SharedInboxDev.run(args) ?? ScreenRecDev.run(args)
         }
     }
 

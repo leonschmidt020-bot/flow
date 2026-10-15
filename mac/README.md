@@ -19,6 +19,16 @@ ist. Dazu kommt **ClipVault**, ein Zwischenablage-Verlauf (⌘⇧V). Beide laufe
 - „Nur meine Stimme“: Stimmprofil einlernen, fremde Stimmen und Mac-Ton werden herausgefiltert.
 - Sprachbefehle: „Erinner mich morgen um 9 …“, „Termin Freitag 14 Uhr …“, „Notiz: …“, „Schick <Name>: …“ (an den
   geteilten ClipVault-Tresor).
+- Bildschirmaufnahme: **⌃⌥R** (oder Menü „Bildschirm aufnehmen …“ oder der Kontrollzentrum-Knopf „Bildschirm aufnehmen
+  (Flow)“) nimmt den Bildschirm unter der Maus auf – bei mehreren Bildschirmen zeigt ein roter Rahmen, welcher. Ton:
+  Ohne Ton · Mikrofon · Systemton. Schalter „Maus leuchtet“ (goldenes Leuchten + Klick-Ring fürs Erklären). Countdown
+  3 · 2 · 1 in der Pille, dann ● Laufzeit; drüberfahren → „■ Beenden“ (oder nochmal ⌃⌥R). Pille und Karten von Flow
+  sind nicht im Video. Danach sofort „Aufnahme fertig“: **Kopieren** legt die echte MP4-Datei in die Zwischenablage –
+  „Nur Video“ oder „Video + Transkript + Bilder“ (mit Mikrofon: lokales Transkript mit Zeitmarken über Parakeet) bzw.
+  „Video + Bilder“: Schlüsselbilder bei Klicks/Satzanfängen und Mausspur-Bilder als Text-Liste für Claude Code & Co.
+  Gespeichert wird im Ordner der macOS-Bildschirmfotos (sonst Schreibtisch), Bilder in „<Video> – Bilder“.
+  Kontrollzentrum-Knopf: Systemeinstellungen → Kontrollzentrum bzw. „Steuerelemente bearbeiten“ → „Bildschirm aufnehmen
+  (Flow)“. Er ist optional – klappt sein Bau nicht, läuft Flow ohne ihn (⌃⌥R geht immer).
 - Agent-Prompts: „Prompt: …“ sagen und frei erzählen → Flow macht daraus einen klaren Auftrag für Claude Code & Co.
   (Ziel, Kontext, Aufgabe, Prüfpunkte, Regeln, offene Punkte). Karte an der Pille mit Kopieren/Einfügen/Ansehen, dein
   Original bleibt immer erhalten, Verlauf unter Scratchpad › Agent-Prompts. Mit Claude-CLI formuliert Claude, ohne sie
@@ -68,7 +78,7 @@ Klappt das nicht, wird ad-hoc signiert – dann nach jedem Update die Freigaben 
 | Mikrofon | Diktat und Meetings |
 | Bedienungshilfen | Text an der Cursor-Stelle einfügen, Korrekturen mitlesen (Flow und ClipVault) |
 | Eingabeüberwachung | die fn-Taste erkennen |
-| Bildschirm- & Systemaudioaufnahme | nur für Meetings (Ton der anderen), beim ersten Meeting |
+| Bildschirm- & Systemaudioaufnahme | Meetings (Ton der anderen) und Bildschirmaufnahme (⌃⌥R) – macOS fragt beim ersten Mal |
 | Kalender / Erinnerungen | nur wenn du Sprachbefehle dafür nutzt |
 
 `setup.sh` stellt die fn-Taste auf „Nichts tun“ (sonst öffnet fn das Emoji-Fenster).
@@ -78,6 +88,7 @@ Klappt das nicht, wird ad-hoc signiert – dann nach jedem Update die Freigaben 
 - **100 % lokal.** Stimme, Diktate, Wörterbuch, Meetings, Statistik und Zwischenablage bleiben auf dem Mac
   (`~/.config/flow`, `~/.config/flow-clipvault`, nur für dich lesbar). Keine Telemetrie, kein Konto.
 - Einzige Cloud: der **optionale, selbst betriebene** Sync-Worker fürs Teilen – er sieht nur Chiffrat.
+- Bildschirmaufnahmen, Transkript und Bilder liegen nur als Dateien auf dem Mac (Ordner der Bildschirmfotos).
 - Was trotzdem ins Netz geht: einmalig Paket- und Modell-Downloads; die Update-Prüfung fragt jede Minute das
   öffentliche Git-Repo (`git ls-remote`, abschaltbar in Einstellungen → Allgemein); ClipVault lädt für die
   Link-Vorschau die Seite eines kopierten Links.
@@ -130,7 +141,10 @@ Flow is a local dictation app for macOS: **hold fn, speak, release** – the tex
 Homebrew), personal dictionary that learns from your edits, filler removal, snippets, per-app style, meeting notetaker
 with speaker separation, audio import, "only my voice" filtering, voice commands (reminders, calendar, notes, send to
 shared vault), agent prompts (say "Prompt: …" and ramble – Flow turns it into a structured task for a coding agent,
-keeping your original), and a hub window. ClipVault: history of text/links/images/files, pinning, collections, OCR, and optional
+keeping your original), screen recording (⌃⌥R or a Control Center button: records the screen under the mouse with no
+sound, microphone or system audio, optional cursor glow, Flow's own pill/cards excluded; afterwards "Copy" puts the real
+MP4 on the clipboard – video only, or together with a local transcript, keyframes and mouse-trail images for coding
+agents; saved to your macOS screenshot folder, else the Desktop), and a hub window. ClipVault: history of text/links/images/files, pinning, collections, OCR, and optional
 end-to-end encrypted sharing of one vault with one friend via **your own** free Cloudflare Worker
 ([5-minute guide](clipvault/sync-worker/README.md)). Sharing is off by default.
 
@@ -148,7 +162,7 @@ It checks the OS and tools, clones to `~/Library/Application Support/Flow/src` (
 builds both apps, downloads the models and starts onboarding. A local self-signed certificate "Flow Local Signing" is
 created in your login keychain so macOS keeps permissions across updates (fallback: ad-hoc signing with a warning).
 
-**Permissions:** Microphone, Accessibility, Input Monitoring, Screen & System Audio Recording (meetings only),
+**Permissions:** Microphone, Accessibility, Input Monitoring, Screen & System Audio Recording (meetings and screen recording),
 Calendar/Reminders (only for those voice commands).
 
 **Privacy:** 100 % local, no account, no telemetry. The only cloud component is the optional self-hosted sync worker,

@@ -71,6 +71,8 @@ copy_tools() {
 
 # Lokale Änderungen würden „git pull“ blockieren → sicher beiseitelegen (git stash, nichts geht verloren)
 stash_dirty() {  # $1 = Repo-Ordner
+  # vom Bau erzeugte Dateien zurücksetzen (sonst „verändert“ → unnötiges stash)
+  git -C "$1" checkout -- Extensions/FlowControls/Metadata.appintents >/dev/null 2>&1 || true
   if [ -n "$(git -C "$1" status --porcelain --untracked-files=no)" ]; then
     local tag="update.sh $(date '+%Y-%m-%d %H:%M')"
     git -C "$1" stash push --quiet -m "$tag" && echo "⚠︎  Lokale Änderungen in $(basename "$1") beiseitegelegt: git stash list („${tag}“)"

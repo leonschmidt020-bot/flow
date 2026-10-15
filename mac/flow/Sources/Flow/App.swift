@@ -56,6 +56,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private(set) var meeting: MeetingController!
     private let hotkey = HotkeyMonitor()
     private var meetingShortcut: GlobalShortcut?
+    private var screenRecShortcut: GlobalShortcut?
     private var hotkeyRetry: Timer?
     private var retentionTimer: Timer?
     private var modelState: Transcriber.State = .notLoaded
@@ -77,7 +78,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         pill = PillController()
         dictation = DictationController(pill: pill)
         meeting = MeetingController(pill: pill)
-        dictation.restingMode = { [weak self] in self?.meeting.restingPillMode ?? .idle }
+        dictation.restingMode = { [weak self] in ScreenRec.shared.restingPillMode ?? self?.meeting.restingPillMode ?? .idle }
+        ScreenRec.shared.pill = pill
+        ScreenRec.shared.fallbackMode = { [weak self] in self?.meeting.restingPillMode ?? .idle }
         dictation.callActive = { [weak self] in self?.meeting.callActive ?? false }
         Health.shared.busyProbe = { Updater.appBusy }
         meeting.askOver = { app, answer in
@@ -100,6 +103,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         meetingShortcut = GlobalShortcut(keyCode: kVK_ANSI_M, modifiers: controlKey | optionKey, id: 1) { [weak self] in
             self?.meeting.toggle()
         }
+        // flowdictation://aufnahme – vom Kontrollzentrum-Knopf „Bildschirm aufnehmen (Flow)“ (Extensions/FlowControls)
+        NSAppleEventManager.shared().setEventHandler(self, andSelector: #selector(handleURL(_:reply:)),
+                                                     forEventClass: AEEventClass(kInternetEventClass), andEventID: AEEventID(kAEGetURL))
+        // ⌃⌥R: Bildschirmaufnahme (öffnen → starten → stoppen), siehe VoiceFlow/ScreenRec
+        screenRecShortcut = GlobalShortcut(keyCode: kVK_ANSI_R, modifiers: controlKey | optionKey, id: 3) { ScreenRec.shared.toggle() }
 
         // Fernsteuerung (Hammerspoon, Stream Deck): `flow dictate|meeting|open|status`.
         // Aufnahme-Befehle brauchen den geheimen Schlüssel aus ~/.config/flow/token (nur der eigene Benutzer kann ihn lesen).
@@ -238,6 +246,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         v.onPromptAccept = { [weak self] in self?.meeting.acceptPrompt() }
         v.onPromptDismiss = { [weak self] in self?.meeting.dismissPrompt() }
         v.onMeetingClick = { [weak self] in self?.meeting.showWindow() }
+        v.onScreenRecClick = { ScreenRec.shared.pillClicked() }
         v.onQuestionAccept = { [weak self] in let h = self?.questionHandler; self?.questionHandler = nil; h?(true) }
         v.languageShort = Settings.shared.languageMode.short
         v.allVoices = !Settings.shared.onlyMyVoice
@@ -450,6 +459,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             m.addItem(mom)
         }
         m.addItem(item("Meetings & Transkripte …", #selector(showMeetings)))
+        let rec = item(ScreenRec.shared.isRecording ? "Bildschirmaufnahme beenden" : "Bildschirm aufnehmen …", #selector(toggleScreenRec))
+        rec.keyEquivalent = "r"; rec.keyEquivalentModifierMask = [.control, .option]
+        m.addItem(rec)
         m.addItem(.separator())
 
         let posMenu = NSMenu()
@@ -487,6 +499,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func startHandsFree() { dictation.start(handsFree: true) }
     @objc private func enrollVoice() { VoiceFlowWindow.shared.show(.training) }
     @objc private func toggleMeeting() { meeting.toggle() }
+    @objc private func toggleScreenRec() { ScreenRec.shared.toggle() }
+    @objc private func handleURL(_ e: NSAppleEventDescriptor, reply: NSAppleEventDescriptor) {
+        guard let s = e.paramDescriptor(forKeyword: keyDirectObject)?.stringValue, let u = URL(string: s), u.scheme == "flowdictation" else { return }
+        log("Adresse geöffnet: \(u.host ?? u.path)")
+        switch u.host ?? "" {
+        case "aufnahme", "record": ScreenRec.shared.toggle()
+        default: break
+        }
+    }
     @objc private func toggleScreenCapture() { MeetingContext.shared.setEnabled(!MeetingContext.shared.enabled) }
     @objc private func markMoment() { MeetingContext.shared.markMoment() }
     @objc private func showMeetings() { meeting.showWindow() }

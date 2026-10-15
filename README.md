@@ -13,6 +13,7 @@ Dazu gehört **ClipVault**, ein Verlauf für die Zwischenablage mit Suche, Bilde
 | Diktat-Taste | **fn** halten (doppelt tippen = freihändig) | **rechte Strg** halten (doppelt tippen = freihändig) – ohne rechte Strg (Copilot-Taste, z. B. Samsung Galaxy Book): in den Einstellungen **Alt Gr** wählen |
 | Spracherkennung | Parakeet (CoreML), optional Whisper | Parakeet v3 (sherpa-onnx), optional Whisper |
 | ClipVault | ⌘⇧V | Strg+Umschalt+V |
+| Bildschirmaufnahme | ⌃⌥R oder Kontrollzentrum-Knopf (Bildschirm unter der Maus, Ton wählbar, lokales Transkript) | – (nur Mac) |
 | Voraussetzung | macOS 26+, Apple Silicon | Windows 10/11, 64-Bit |
 | Code | [`mac/`](mac/README.md) (Swift) | [`windows/`](windows/README.md) (Electron + TypeScript) |
 
@@ -62,5 +63,8 @@ search, images, pins and collections.
 - Optional end-to-end encrypted ClipVault sharing via your own free Cloudflare Worker (off by default).
 - **Agent prompts** (“Prompt: …”): text goes to Anthropic only when you say “Prompt: …” or click “Build prompt”, and only through
   your **own** Claude CLI (optional); without it Flow builds the prompt locally by rules.
+- **Screen recording (Mac):** ⌃⌥R or a Control Center button records the screen under the mouse (no sound, microphone or
+  system audio); Flow's own pill and cards stay out of the video. With the microphone you get a local transcript, plus
+  keyframes and mouse trails to paste into a coding agent.
 
 Flow is an independent project and is **not affiliated with Wispr**. License: MIT.

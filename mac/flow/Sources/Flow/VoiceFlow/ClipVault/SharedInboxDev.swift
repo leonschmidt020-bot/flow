@@ -6,6 +6,8 @@ import SwiftUI
 //   Flow --shared-gist-test [--echt]       Klassifizierer: erfundene Beispiele; mit --echt zusätzlich die Texte aus
 //                                            shared.json (nur lesend) – ausgegeben werden NUR Art + Kernaussage + Zeit
 //   Flow --shared-inbox-geometry           Lage der Liste auf allen Bildschirm-Anordnungen nachrechnen
+//   Flow --pill-hover-test [-v]            Überfahren der ruhenden Pille nachspielen (echte PillView, unsichtbares
+//                                            Fenster): öffnet „Neu vom Partner“ von JEDER Stelle der Pille aus? alt vs. neu
 
 enum SharedInboxDev {
     static func run(_ args: [String]) -> Int32? {
@@ -14,6 +16,7 @@ enum SharedInboxDev {
         case "--shared-inbox-renders": return renders(dir: args.count > 2 ? args[2] : NSTemporaryDirectory() + "inbox_renders")
         case "--shared-gist-test": return gistTest(real: args.contains("--echt"))
         case "--shared-inbox-geometry": return geometry()
+        case "--pill-hover-test": return pillHoverTest(verbose: args.contains("-v"))
         default: return nil
         }
     }
@@ -240,6 +243,31 @@ enum SharedInboxDev {
                 }
             }
         }
+        // Echte Anordnung (08.10.2026): MacBook Hauptbildschirm, Monitor B rechts oben, Monitor A links oben; Pille „Mitte rechts“
+        // auf allen drei, beim Überfahren waagerecht (~82 × 24). Die Liste muss auf DEMSELBEN Bildschirm wie die Pille liegen.
+        let joel: [(String, NSRect, NSRect)] = [
+            ("MacBook", NSRect(x: 0, y: 0, width: 1512, height: 982), NSRect(x: 0, y: 0, width: 1512, height: 949)),
+            ("Monitor B", NSRect(x: 1027, y: 982, width: 1920, height: 1080), NSRect(x: 1027, y: 982, width: 1920, height: 1080)),
+            ("Monitor A", NSRect(x: -1021, y: 982, width: 2048, height: 1152), NSRect(x: -1021, y: 982, width: 2048, height: 1152)),
+        ]
+        for (name, sf, vis) in joel {
+            checks += 1
+            let c = PillPreset.middleRight.center(in: vis)
+            let w: CGFloat = 82, h: CGFloat = 24
+            let cx = min(max(c.x, vis.minX + w / 2 + 6), vis.maxX - w / 2 - 6)
+            let pill = NSRect(x: cx - w / 2, y: c.y - h / 2, width: w, height: h)
+            let lay = SharedInboxBadge.listLayout(card: NSSize(width: SharedInboxBadge.listWidth, height: 230), pill: pill, visible: vis, frame: sf)
+            let card = lay.hitRectsInScreen[0]
+            let sameScreen = sf.contains(card) && sf.contains(lay.windowFrame)
+            let free = !card.intersects(pill)
+            print("  echt/\(name): Pille \(Int(pill.minX)),\(Int(pill.minY)) → Liste \(Int(card.minX)),\(Int(card.minY)) \(Int(card.width))×\(Int(card.height))")
+            if !(sameScreen && free) { fails += 1; print("✗ echt/\(name): gleicher Bildschirm \(sameScreen) frei \(free)") }
+            // Protokoll vom 07./08.10. „Liste geöffnet (1) bei 1022,221 480×230“ = genau diese Lage auf dem MacBook
+            if name == "MacBook" {
+                checks += 1
+                if abs(card.minX - 1022) > 1 || abs(card.minY - 221) > 2 { fails += 1; print("✗ MacBook-Lage passt nicht zum Protokoll (1022,221)") }
+            }
+        }
         // Rahmen-Klick: auf dem Rahmen ja, auf der Kapsel nein, weit weg nein
         let pill = NSRect(x: 100, y: 100, width: 96, height: 26)
         let ringOK = SharedInboxBadge.isOnRing(NSPoint(x: 148, y: 128.5), pill: pill) && !SharedInboxBadge.isOnRing(NSPoint(x: 148, y: 113), pill: pill)
@@ -247,5 +275,136 @@ enum SharedInboxDev {
         if !ringOK { fails += 1; print("✗ Rahmen-Klick-Zone") }
         print("\(checks + 1) Lage-Prüfungen, \(fails) Fehler")
         return fails == 0 ? 0 : 1
+    }
+
+    // MARK: Überfahren der Pille (echte PillView in einem unsichtbaren Fenster, Maus nachgespielt)
+
+    /// Spielt für jede Stelle der ruhenden Pille 1,5 s „Maus liegt still drauf“ nach: PillController-Takt (20/s) setzt
+    /// den Hover, die Pille animiert (60/s), SharedInboxBadge prüft alle 50 ms „Maus auf der Pille“ und öffnet nach 0,4 s.
+    /// alt = Rechteck der GERADE gezeichneten Kapsel ± 6 pt (bis 1.7.23) · neu = PillView.hoverZoneContains + isHovered
+    static func pillHoverTest(verbose: Bool) -> Int32 {
+        _ = NSApplication.shared
+        let screens: [(String, NSRect)] = [("MacBook", NSRect(x: 0, y: 0, width: 1512, height: 949)),
+                                           ("Monitor B", NSRect(x: 1027, y: 982, width: 1920, height: 1080)),
+                                           ("Monitor A", NSRect(x: -1021, y: 982, width: 2048, height: 1152))]
+        let presets: [PillPreset] = [.middleRight, .middleLeft, .bottomCenter, .topRight]
+        var fails = 0
+        func pad(_ x: String, _ n: Int) -> String { x.padding(toLength: max(n, x.count), withPad: " ", startingAt: 0) }
+        print(pad("Bildschirm", 11) + pad("Pille", 14) + pad("öffnet alt", 12) + pad("öffnet neu", 12) + "flackert alt")
+        for (sname, vis) in screens {
+            for preset in presets {
+                var oldOK = 0, newOK = 0, total = 0, oldFlicker = 0
+                // Raster über die ruhende Kapsel ± 6 pt (Fangbereich)
+                let probe = makePill(vis: vis, preset: preset)
+                let zone = probe.view.restRectInScreen.insetBy(dx: -PillView.hitMargin + 0.5, dy: -PillView.hitMargin + 0.5)
+                var pts: [NSPoint] = []
+                for iy in 0...10 { for ix in 0...4 {
+                    pts.append(NSPoint(x: zone.minX + zone.width * CGFloat(ix) / 4, y: zone.minY + zone.height * CGFloat(iy) / 10))
+                } }
+                for m in pts {
+                    total += 1
+                    let a = simulate(vis: vis, preset: preset, mouse: m, legacy: true)
+                    let b = simulate(vis: vis, preset: preset, mouse: m, legacy: false)
+                    if a.opens { oldOK += 1 }
+                    if b.opens { newOK += 1 } else if verbose { print("   ✗ neu öffnet nicht bei \(Int(m.x)),\(Int(m.y)) (Wechsel \(b.toggles))") }
+                    if a.toggles > 2 { oldFlicker += 1 }
+                    if b.toggles > 1 { fails += 1; print("   ✗ neu flackert bei \(Int(m.x)),\(Int(m.y)): \(b.toggles) Wechsel") }
+                }
+                if newOK != total { fails += total - newOK }
+                print(pad(sname, 11) + pad(preset.rawValue, 14) + pad("\(oldOK)/\(total)", 12) + pad("\(newOK)/\(total)", 12) + "\(oldFlicker)")
+            }
+        }
+        // Weg: Maus verlässt die Pille → Hover geht wirklich aus (keine „klebende“ Pille)
+        let far = simulate(vis: screens[0].1, preset: .middleRight, mouse: NSPoint(x: 1380, y: 474), legacy: false)
+        if far.everHover { fails += 1; print("✗ Hover an, obwohl die Maus 100 pt neben der Pille liegt") }
+        let leave = leaveTest(vis: screens[0].1)
+        if !leave { fails += 1; print("✗ Hover bleibt nach dem Verlassen an") }
+        // ClipVault-Knopf unter der Pille (19.10.2026): sichtbar, auf dem Bildschirm, Weg dorthin hält den Hover
+        var cvOK = 0, cvTotal = 0
+        for (sname, vis) in screens {
+            for preset in presets + [.bottomLeft, .topCenter] {
+                cvTotal += 1
+                if let why = clipButtonTest(vis: vis, preset: preset) { fails += 1; print("   ✗ ClipVault-Knopf \(sname) \(preset.rawValue): \(why)") }
+                else { cvOK += 1 }
+            }
+        }
+        print("ClipVault-Knopf: \(cvOK)/\(cvTotal) Anordnungen ok")
+        print(fails == 0 ? "ALLE PRÜFUNGEN OK (neu öffnet von jeder Stelle der Pille, kein Flackern)" : "\(fails) FEHLER")
+        return fails == 0 ? 0 : 1
+    }
+
+    private static func makePill(vis: NSRect, preset: PillPreset) -> (view: PillView, panel: NSPanel) {
+        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 460, height: 150), styleMask: [.borderless, .nonactivatingPanel],
+                            backing: .buffered, defer: true)
+        let v = PillView(frame: NSRect(x: 0, y: 0, width: 460, height: 150))
+        panel.contentView = v
+        let pl = PillPlacement(preset: preset)
+        let a = pl.center(in: vis)
+        v.vertical = pl.isSide
+        v.screenRect = vis
+        v.anchor = a
+        panel.setFrameOrigin(PillController.panelOrigin(anchor: a, size: panel.frame.size, screen: vis))
+        for _ in 0..<80 { v.tick() }     // Ruhe-Größe einschwingen
+        return (v, panel)
+    }
+
+    /// 1,5 s Maus still bei `mouse`. opens = SharedInboxBadge hätte nach 0,4 s geöffnet; toggles = Hover-Wechsel
+    private static func simulate(vis: NSRect, preset: PillPreset, mouse m: NSPoint, legacy: Bool) -> (opens: Bool, toggles: Int, everHover: Bool) {
+        let (v, panel) = makePill(vis: vis, preset: preset)
+        _ = panel
+        var hover = false, toggles = 0, run = 0, best = 0, ever = false
+        for _ in 0..<30 {                                   // 30 × 50 ms
+            let hit = legacy ? v.capsuleRectInScreen.insetBy(dx: -6, dy: -6).contains(m) : v.hoverZoneContains(m)
+            if hit != hover { toggles += 1; hover = hit }
+            ever = ever || hit
+            v.setHover(hit)
+            for _ in 0..<3 { v.tick() }                     // Pille animiert 60/s
+            let pill = v.capsuleRectInScreen
+            let onPill = legacy ? pill.insetBy(dx: -6, dy: -6).contains(m) : (pill.insetBy(dx: -6, dy: -6).contains(m) || v.isHovered)
+            run = onPill ? run + 1 : 0
+            best = max(best, run)
+        }
+        return (best * 50 > Int(SharedInboxBadge.hoverDelay * 1000) + 50, toggles, ever)
+    }
+
+    /// nil = ok, sonst der Grund
+    private static func clipButtonTest(vis: NSRect, preset: PillPreset) -> String? {
+        let (v, panel) = makePill(vis: vis, preset: preset)
+        _ = panel
+        v.clipVaultCheck = { true }
+        let start = NSPoint(x: v.restRectInScreen.midX, y: v.restRectInScreen.midY)
+        for _ in 0..<12 { v.setHover(v.hoverZoneContains(start)); for _ in 0..<3 { v.tick() } }
+        guard v.isHovered else { return "Hover geht auf der Pille nicht an" }
+        guard let cb = v.clipButtonRectInScreen else { return "kein Knopf beim Drüberfahren" }
+        let pill = v.hoverRectInScreen
+        if !vis.contains(cb) { return "Knopf ragt aus dem Bildschirm" }
+        if cb.intersects(pill) { return "Knopf überdeckt die Pille" }
+        let roomBelow = pill.minY - PillView.clipButtonGap - PillView.clipButtonSize >= vis.minY + 4
+        if roomBelow && cb.maxY > pill.minY { return "Knopf nicht unter der Pille, obwohl Platz ist" }
+        // Weg von der Pillenmitte zur Knopfmitte in 12 Schritten: Hover bleibt immer an
+        let end = NSPoint(x: cb.midX, y: cb.midY)
+        for i in 0...12 {
+            let f = CGFloat(i) / 12
+            let m = NSPoint(x: pill.midX + (end.x - pill.midX) * f, y: pill.midY + (end.y - pill.midY) * f)
+            v.setHover(v.hoverZoneContains(m)); for _ in 0..<3 { v.tick() }
+            if !v.isHovered { return "Hover geht auf dem Weg zum Knopf aus (\(Int(m.x)),\(Int(m.y)))" }
+        }
+        for _ in 0..<20 { v.setHover(v.hoverZoneContains(end)); for _ in 0..<3 { v.tick() } }
+        guard v.isHovered, v.clipButtonRectInScreen == cb else { return "Knopf springt/verschwindet, wenn die Maus drauf liegt" }
+        // Ohne ClipVault kein Knopf
+        v.setHover(false); v.clipVaultCheck = { false }; v.setHover(true)
+        if v.clipButtonRectInScreen != nil { return "Knopf sichtbar, obwohl ClipVault fehlt" }
+        return nil
+    }
+
+    private static func leaveTest(vis: NSRect) -> Bool {
+        let (v, panel) = makePill(vis: vis, preset: .middleRight)
+        _ = panel
+        let on = NSPoint(x: v.restRectInScreen.midX, y: v.restRectInScreen.maxY + 3)
+        for _ in 0..<10 { v.setHover(v.hoverZoneContains(on)); for _ in 0..<3 { v.tick() } }
+        guard v.isHovered else { return false }
+        let off = NSPoint(x: v.restRectInScreen.midX - 140, y: v.restRectInScreen.midY + 80)
+        for _ in 0..<10 { v.setHover(v.hoverZoneContains(off)); for _ in 0..<3 { v.tick() } }
+        return !v.isHovered
     }
 }

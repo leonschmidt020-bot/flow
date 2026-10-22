@@ -95,6 +95,8 @@ final class SharedInboxBadge {
     private var hoverBlockedSince: Date?
     private var openedAt: Date?
     private var closing = false
+    /// Zählt jedes Öffnen/Schließen: ein verspätetes „zu Ende schließen“ darf eine NEU geöffnete Liste nicht wegräumen
+    private var generation = 0
     private var dwell: [String: TimeInterval] = [:]
     private var knownIDs: Set<String>?       // nil = erster Durchlauf (beim Start keine Karte zeigen)
     private var clickMonitor: Any?
@@ -123,8 +125,11 @@ final class SharedInboxBadge {
                 ClipVaultClient.shared.send("copy", id: item.id)
             } else {
                 let pb = NSPasteboard.general
+                FlowPasteboard.noteOwnWrite()
                 pb.clearContents()
-                if let f = item.file { pb.writeObjects([f as NSURL]) }   // echte Datei-URL → Finder, Mail, WhatsApp
+                // echte Datei-URL (Finder, Mail, WhatsApp) + Pfad als Text (Claude Code: ZIP & Co. einfügbar, 09.10.)
+                if let f = item.file { let it = NSPasteboardItem(); it.setString(f.absoluteString, forType: .fileURL)
+                                       it.setString(CVPickSet.shellEscape(f.path), forType: .string); pb.writeObjects([it]) }
                 else if let u = item.image, let img = NSImage(contentsOf: u) { pb.writeObjects([img]) }
                 else if let t = item.text { pb.setString(t, forType: .string) }
                 else if let f = item.fileName { pb.setString(f, forType: .string) }
@@ -173,7 +178,7 @@ final class SharedInboxBadge {
     private static var lastIllustration = ""
     static func randomIllustration() -> String {
         let all = ["illu_geteilt"] + (2...7).map { "illu_geteilt_\($0)" }
-        let pick = all.filter { $0 != lastIllustration && VFAsset.image($0) != nil }.randomElement() ?? "illu_geteilt"
+        let pick = all.filter { $0 != lastIllustration && VFAsset.exists($0) }.randomElement() ?? "illu_geteilt"
         lastIllustration = pick
         return pick
     }
@@ -254,7 +259,8 @@ final class SharedInboxBadge {
         guard let pill = VFNotify.shared.pillAnchor?(), pill.width > 0 else { return }
         PillRing.shared.set(.shared, hasNew)
         let m = NSEvent.mouseLocation
-        let onPill = SharedInboxBadge.pillZone(pill).contains(m)
+        // Gleiche Antwort wie die Pille selbst (mit Hysterese) – siehe PillView.hoverZoneContains (08.10.2026)
+        let onPill = VFNotify.shared.mouseOnPill(pill, m)
         if isListOpen, let p = list {
             let card = model.layout.hitRectsInScreen.first ?? .zero
             let inCard = card.contains(m)
@@ -350,22 +356,51 @@ final class SharedInboxBadge {
         }
         guard let pill = VFNotify.shared.pillAnchor?(), pill.width > 0 else { return }
         SmartPillBadge.shared.closeList()
-        let p = list ?? SmartBadgePanel(size: NSSize(width: SharedInboxBadge.listWidth, height: 200), acceptsMouse: true)
+        let p = SpaceGuard.fresh(list, "Neu vom Partner") ?? SmartBadgePanel(size: NSSize(width: SharedInboxBadge.listWidth, height: 200), acceptsMouse: true)
         list = p
         closing = false
         model.copied = []; model.viewed = []; dwell = [:]
         model.visibleIDs = Set(model.items.prefix(SharedInboxList.maxRows).map(\.id))
         model.illustration = SharedInboxBadge.lastIllustration.isEmpty ? "illu_geteilt" : SharedInboxBadge.lastIllustration
         model.progress = 0
-        layoutList(pill: pill)
+        generation += 1
+        let gen = generation
+        let scr = layoutList(pill: pill)
         p.contentView = VFNotifyHostingView(rootView: SharedInboxStage(model: model))
         p.ignoresMouseEvents = true
+        p.alphaValue = 1
         p.orderFrontRegardless()
         openedAt = Date()
         leftSince = nil; hoverSince = nil
-        log("Geteilt: Liste geöffnet (\(model.items.count)) bei \(Int(model.layout.hitRectsInScreen.first?.minX ?? 0)),\(Int(model.layout.hitRectsInScreen.first?.minY ?? 0)) \(Int(model.layout.hitRectsInScreen.first?.width ?? 0))×\(Int(model.layout.hitRectsInScreen.first?.height ?? 0))")
+        let card = model.layout.hitRectsInScreen.first ?? .zero
+        log("Geteilt: Liste geöffnet (\(model.items.count)) bei \(Int(card.minX)),\(Int(card.minY)) \(Int(card.width))×\(Int(card.height)) · "
+            + SharedInboxBadge.geometryLine(pill: pill, screen: scr, window: p.frame, mouse: NSEvent.mouseLocation))
         DispatchQueue.main.async { withAnimation(.spring(response: 0.46, dampingFraction: 0.78)) { self.model.progress = 1 } }
+        // Nach 0,3 s nachsehen, ob die Liste wirklich zu sehen ist (für künftige „öffnet nicht“-Fälle im Protokoll)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            guard let self, self.generation == gen, let p = self.list else { return }
+            log("Geteilt: Liste nach 0,3 s – " + SharedInboxBadge.visibilityLine(p, progress: self.model.progress))
+            self.list = SpaceGuard.ensureShown(p, "Neu vom Partner") {
+                SmartBadgePanel(size: NSSize(width: SharedInboxBadge.listWidth, height: 200), acceptsMouse: true)
+            }
+        }
         startTimer()
+    }
+
+    /// Protokollzeile: Pille, gewählter Bildschirm, Fenster, Maus (Bildschirmkoordinaten, ganze Punkte)
+    static func geometryLine(pill: NSRect, screen: NSScreen?, window: NSRect, mouse: NSPoint) -> String {
+        func r(_ x: NSRect) -> String { "\(Int(x.minX)),\(Int(x.minY)) \(Int(x.width))×\(Int(x.height))" }
+        let s = screen.map { "„\($0.localizedName)“ \(r($0.frame))" } ?? "kein Bildschirm (Ersatz)"
+        let under = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) }?.localizedName ?? "–"
+        return "Pille \(r(pill)) · Bildschirm \(s) · Fenster \(r(window)) · Maus \(Int(mouse.x)),\(Int(mouse.y)) auf „\(under)“"
+    }
+
+    /// Protokollzeile: ist das Fenster wirklich sichtbar? (sichtbar, Deckkraft, nicht verdeckt, Space, Ebene, Fortschritt)
+    static func visibilityLine(_ p: NSWindow, progress: CGFloat) -> String {
+        let occluded = !p.occlusionState.contains(.visible)
+        return "sichtbar=\(p.isVisible) alpha=\(String(format: "%.2f", p.alphaValue)) verdeckt=\(occluded) "
+            + "aktiverSpace=\(p.isOnActiveSpace) Fensterserver=\(SpaceGuard.isOnScreen(p) ? "zeigt" : "zeigt NICHT") Ebene=\(p.level.rawValue) Bildschirm=„\(p.screen?.localizedName ?? "–")“ "
+            + "Fortschritt=\(String(format: "%.2f", progress))"
     }
 
     func closeList() { closeList(reason: "von außen") }
@@ -379,8 +414,16 @@ final class SharedInboxBadge {
         openedAt = nil
         p.ignoresMouseEvents = true
         withAnimation(.spring(response: 0.34, dampingFraction: 0.92)) { model.progress = 0 }
+        generation += 1
+        let gen = generation
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.36) { [weak self] in
             guard let self else { return }
+            guard self.generation == gen else {
+                // Inzwischen wieder geöffnet: Fenster + Inhalt gehören der neuen Liste (vorher: contentView = nil →
+                // leeres, aber „offenes“ Fenster). Angesehenes trotzdem merken.
+                if !viewed.isEmpty { self.markSeen(viewed) }
+                return
+            }
             p.orderOut(nil)
             p.contentView = nil
             self.closing = false
@@ -392,15 +435,18 @@ final class SharedInboxBadge {
         log("Geteilt: Liste zu (\(reason)) – \(viewed.count) angesehen, \(max(0, kept)) bleiben neu")
     }
 
-    private func layoutList(pill: NSRect? = nil) {
-        guard let p = list, let pill = pill ?? VFNotify.shared.pillAnchor?() else { return }
-        let scr = VFNotify.screen(containing: NSPoint(x: pill.midX, y: pill.midY)) ?? NSScreen.main
+    @discardableResult
+    private func layoutList(pill: NSRect? = nil) -> NSScreen? {
+        guard let p = list, let pill = pill ?? VFNotify.shared.pillAnchor?() else { return nil }
+        let scr = VFNotify.screen(containing: NSPoint(x: pill.midX, y: pill.midY))
+            ?? VFNotify.screen(containing: NSEvent.mouseLocation) ?? NSScreen.main
         let vis = scr?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1512, height: 949)
         let sf = scr?.frame ?? vis
         let (size, rows) = SharedInboxList.size(for: model.items, maxHeight: SharedInboxBadge.maxCardHeight(pill: pill, visible: vis))
         model.rowsHeight = rows
         model.layout = SharedInboxBadge.listLayout(card: size, pill: pill, visible: vis, frame: sf)
         p.setFrame(model.layout.windowFrame, display: true)
+        return scr
     }
 
     // MARK: Geometrie (reine Berechnung, testbar)
@@ -739,15 +785,21 @@ struct SharedInboxRow: View {
         }
     }
 
-    private static var thumbCache: [URL: NSImage] = [:]
+    /// 18.10.2026: vorher [URL: NSImage] ohne Grenze – jedes je geteilte Bild blieb als 192-px-Vorschau für immer im Speicher
+    private static let thumbCache: NSCache<NSURL, NSImage> = {
+        let c = NSCache<NSURL, NSImage>()
+        c.countLimit = 40
+        c.totalCostLimit = 8 << 20
+        return c
+    }()
     static func thumbnail(_ url: URL) -> NSImage? {
-        if let c = thumbCache[url] { return c }
+        if let c = thumbCache.object(forKey: url as NSURL) { return c }
         guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
               let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true,
                                                                     kCGImageSourceCreateThumbnailWithTransform: true,
                                                                     kCGImageSourceThumbnailMaxPixelSize: 192] as CFDictionary) else { return nil }
         let img = NSImage(cgImage: cg, size: NSSize(width: CGFloat(cg.width) / 2, height: CGFloat(cg.height) / 2))
-        thumbCache[url] = img
+        thumbCache.setObject(img, forKey: url as NSURL, cost: VFImageCache.cost(cg))
         return img
     }
 

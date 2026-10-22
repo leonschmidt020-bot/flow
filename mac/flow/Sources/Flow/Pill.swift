@@ -1,5 +1,22 @@
 import AppKit
 
+/// Eingefärbte SF-Symbole der Pille, einmal je Symbol/Größe/Gewicht/Deckkraft gebaut (nur Hauptthread).
+/// 18.10.2026: beim Animieren entstanden Symbol + eingefärbtes Bild in jedem Bild neu (bis 60×/s).
+enum PillSymbols {
+    private static var cache: [String: NSImage] = [:]
+    static func tinted(_ name: String, size: CGFloat, weight: NSFont.Weight, white: CGFloat) -> NSImage? {
+        let key = "\(name)|\(size)|\(weight.rawValue)|\(white)"
+        if let c = cache[key] { return c }
+        guard let g = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: size, weight: weight)) else { return nil }
+        let tinted = NSImage(size: g.size, flipped: false) { rect in
+            g.draw(in: rect); NSColor.white.withAlphaComponent(white).set(); rect.fill(using: .sourceAtop); return true
+        }
+        cache[key] = tinted
+        return tinted
+    }
+}
+
 /// Die schwebende Pille im Flow-Stil.
 /// Ruhe: kleiner dunkler Strich. Sprechen: schwarze Kapsel mit weißen Pegel-Balken.
 final class PillView: NSView {
@@ -42,6 +59,10 @@ final class PillView: NSView {
     var onQuestionAccept: (() -> Void)?
     /// Klick auf die Weltkugel (Pille in Ruhe, Maus darüber)
     var onLanguageClick: (() -> Void)?
+    /// Klick auf den kleinen ClipVault-Knopf unter der Pille (Pille in Ruhe, Maus darüber)
+    var onClipVaultClick: (() -> Void)?
+    /// ClipVault-Knopf zeigen (nur wenn ClipVault eingerichtet ist – vom AppDelegate gesetzt)
+    var clipVaultAvailable = false { didSet { if clipVaultAvailable != oldValue { wake() } } }
     /// Kürzel der aktiven Sprache für die Weltkugel („DE+EN“)
     var languageShort = "DE+EN" { didSet { wake() } }
     /// Stimmfilter aus („Alle Stimmen“) → beim Drüberfahren kleines Zwei-Personen-Symbol
@@ -98,7 +119,13 @@ final class PillView: NSView {
         wake()
     }
 
-    func setHover(_ v: Bool) { if v != hover { hover = v; wake() } }
+    /// Ist ClipVault eingerichtet? Wird bei jedem Drüberfahren einmal gefragt (liest nur die Token-Datei).
+    var clipVaultCheck: (() -> Bool)?
+    func setHover(_ v: Bool) {
+        guard v != hover else { return }
+        if v, let check = clipVaultCheck { clipVaultAvailable = check() }
+        hover = v; wake()
+    }
 
     private func wake() {
         if timer == nil {
@@ -180,19 +207,68 @@ final class PillView: NSView {
 
     var capsuleRectInScreen: NSRect { rectInScreen(for: effSize) }
 
-    /// Fangbereich rund um die Kapsel (Kapsel ± 6 pt)
+    /// Fangbereich rund um die Kapsel (wie bisher: Kapsel ± 6 pt)
     static let hitMargin: CGFloat = 6
 
-    /// Liegt die Maus über der Pille? Während einer Bildschirmaufnahme mit Hysterese: beim Drüberfahren wird die
-    /// Pille breiter (und dreht sich am Seitenrand waagerecht) – wer drauf war, bleibt drauf, bis er sie wirklich
-    /// verlässt (sonst flackert „■ Beenden“ an und aus).
+    /// Liegt die Maus über der Pille? MIT Hysterese für die ruhende Pille.
+    ///
+    /// 08.10.2026 (Bericht: „Der Partner schickt mir etwas, ich fahre über die Pille, die Liste öffnet sich nicht“):
+    /// Am Rand („Mitte rechts/links“) steht die ruhende Pille HOCHKANT (9 × 44 pt). Beim Drüberfahren dreht sie
+    /// sich waagerecht (Weltkugel, 44 × 9 → ~82 × 24 pt). Kam die Maus über das obere oder untere Drittel der
+    /// hochkant stehenden Pille, lag sie nach dem Drehen AUSSERHALB der waagerechten Kapsel → Hover aus →
+    /// Pille wieder hochkant → Hover an … (20× pro Sekunde). Die 0,4-s-Wartezeit für „Neu vom Partner“ begann
+    /// dadurch ständig von vorn, die Liste öffnete nie – und es gab auch keinen Protokolleintrag. Nur aus dem
+    /// mittleren Streifen (±10 pt) klappte es; darum stand im Protokoll immer dieselbe Stelle (1022,221).
+    /// Jetzt: solange Hover an ist, zählt auch die Ruhe-Kapsel und die Ziel-Kapsel (volle Größe) mit – wer drauf
+    /// war, bleibt drauf, bis er die Pille wirklich verlässt.
     func hoverZoneContains(_ m: NSPoint) -> Bool {
-        if capsuleRectInScreen.insetBy(dx: -Self.hitMargin, dy: -Self.hitMargin).contains(m) { return true }
-        guard hover, case .screenRec = mode else { return false }
-        let rest = rectInScreen(for: vertical ? NSSize(width: 26, height: 118) : NSSize(width: 118, height: 26))
-        let wide = rectInScreen(for: NSSize(width: 168, height: 30))
-        return rest.insetBy(dx: -Self.hitMargin, dy: -Self.hitMargin).contains(m) || wide.insetBy(dx: -Self.hitMargin, dy: -Self.hitMargin).contains(m)
+        let cur = capsuleRectInScreen.insetBy(dx: -Self.hitMargin, dy: -Self.hitMargin)
+        if cur.contains(m) { return true }
+        if hover, case .screenRec = mode {
+            // 15.10.2026: wie bei der ruhenden Pille – drüber bleibt drüber, auch wenn sie beim Hover breiter wird/sich dreht
+            let rest = rectInScreen(for: vertical ? NSSize(width: 26, height: 118) : NSSize(width: 118, height: 26))
+            let wide = rectInScreen(for: NSSize(width: 168, height: 30))
+            return rest.insetBy(dx: -Self.hitMargin, dy: -Self.hitMargin).contains(m) || wide.insetBy(dx: -Self.hitMargin, dy: -Self.hitMargin).contains(m)
+        }
+        guard hover, case .idle = mode else { return false }
+        if let cb = clipButtonRectInScreen {
+            // 19.10.2026: Pille, Lücke und ClipVault-Knopf als ein Bereich – auf dem Weg nach unten bleibt der Hover an
+            let lane = NSRect(x: cb.minX, y: min(cb.minY, hoverRectInScreen.minY), width: cb.width,
+                              height: max(cb.maxY, hoverRectInScreen.maxY) - min(cb.minY, hoverRectInScreen.minY))
+            if lane.insetBy(dx: -Self.hitMargin, dy: -Self.hitMargin).contains(m) { return true }
+        }
+        return restRectInScreen.insetBy(dx: -Self.hitMargin, dy: -Self.hitMargin).contains(m)
+            || hoverRectInScreen.insetBy(dx: -Self.hitMargin, dy: -Self.hitMargin).contains(m)
     }
+
+    /// ClipVault-Knopf: rund, mittig UNTER der Pille (19.10.2026); passt er unten nicht mehr auf den Bildschirm
+    /// (Pille unten), sitzt er darüber. nil = nicht zu sehen (kein Hover, nicht in Ruhe, ClipVault fehlt).
+    static let clipButtonSize: CGFloat = 26
+    static let clipButtonGap: CGFloat = 6
+    var clipButtonRectInScreen: NSRect? {
+        guard clipVaultAvailable, hover, case .idle = mode else { return nil }
+        return Self.clipButtonRect(pill: hoverRectInScreen, screen: screenRect)
+    }
+    static func clipButtonRect(pill p: NSRect, screen vis: NSRect) -> NSRect {
+        let d = clipButtonSize, g = clipButtonGap
+        var y = p.minY - g - d
+        if vis.height > 0, y < vis.minY + 4 { y = p.maxY + g }
+        var x = p.midX - d / 2
+        if vis.width > 0 { x = min(max(x, vis.minX + 4), vis.maxX - 4 - d) }
+        return NSRect(x: x, y: y, width: d, height: d)
+    }
+    /// Knopf in View-Koordinaten (Zeichnen, Klick)
+    private var clipButtonRectInView: NSRect? {
+        guard let r = clipButtonRectInScreen, let win = window else { return nil }
+        return r.offsetBy(dx: -win.frame.minX, dy: -win.frame.minY)
+    }
+
+    /// Ruhende Pille ohne Maus (hochkant am Seitenrand)
+    var restRectInScreen: NSRect { rectInScreen(for: vertical ? NSSize(width: 9, height: 44) : NSSize(width: 44, height: 9)) }
+    /// Ruhende Pille mit Maus (waagerecht, Weltkugel + Sprache) in voller Größe
+    var hoverRectInScreen: NSRect { rectInScreen(for: NSSize(width: textWidth(languageShort, size: 11, weight: .semibold) + 44, height: 24)) }
+    /// Maus gerade über der Pille (vom PillController gesetzt, mit Hysterese) – EINE Quelle für Pille, Listen und Rahmen
+    var isHovered: Bool { hover }
 
     // MARK: Zeichnen
 
@@ -235,24 +311,17 @@ final class PillView: NSView {
         case .idle:
             if hover && h > 16 {
                 // 🌐 + aktive Sprache
-                let cfg = NSImage.SymbolConfiguration(pointSize: 12, weight: .medium)
-                if let g = NSImage(systemSymbolName: "globe", accessibilityDescription: nil)?.withSymbolConfiguration(cfg) {
-                    let tinted = NSImage(size: g.size, flipped: false) { rect in
-                        g.draw(in: rect); NSColor.white.withAlphaComponent(0.92).set(); rect.fill(using: .sourceAtop); return true
-                    }
-                    tinted.draw(in: NSRect(x: r.minX + 10, y: c.y - g.size.height / 2, width: g.size.width, height: g.size.height),
-                                from: .zero, operation: .sourceOver, fraction: alpha)
+                if let g = PillSymbols.tinted("globe", size: 12, weight: .medium, white: 0.92) {
+                    g.draw(in: NSRect(x: r.minX + 10, y: c.y - g.size.height / 2, width: g.size.width, height: g.size.height),
+                           from: .zero, operation: .sourceOver, fraction: alpha)
                 }
                 drawText(languageShort, at: NSPoint(x: r.minX + 28, y: c.y), size: 11, weight: .semibold, mono: false,
                          color: white.withAlphaComponent(0.92 * alpha), alignLeft: true)
-                if allVoices, let p2 = NSImage(systemSymbolName: "person.2.fill", accessibilityDescription: "Alle Stimmen")?
-                    .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 9.5, weight: .semibold)) {
-                    let tinted = NSImage(size: p2.size, flipped: false) { rect in
-                        p2.draw(in: rect); NSColor.white.withAlphaComponent(0.85).set(); rect.fill(using: .sourceAtop); return true
-                    }
-                    tinted.draw(in: NSRect(x: r.maxX - 10 - p2.size.width, y: c.y - p2.size.height / 2, width: p2.size.width, height: p2.size.height),
-                                from: .zero, operation: .sourceOver, fraction: alpha)
+                if allVoices, let p2 = PillSymbols.tinted("person.2.fill", size: 9.5, weight: .semibold, white: 0.85) {
+                    p2.draw(in: NSRect(x: r.maxX - 10 - p2.size.width, y: c.y - p2.size.height / 2, width: p2.size.width, height: p2.size.height),
+                            from: .zero, operation: .sourceOver, fraction: alpha)
                 }
+                drawClipButton(fade: min(1, (h - 16) / 7) * alpha)
             }
         case .listening:
             drawBars(center: c, count: 9, maxH: h - 9, t: t, level: smoothLevel, color: white, barW: 2.2, gap: 2.3)
@@ -281,13 +350,9 @@ final class PillView: NSView {
             let pb = NSBezierPath(roundedRect: r.insetBy(dx: 0.5, dy: 0.5), xRadius: h / 2 - 0.5, yRadius: h / 2 - 0.5)
             pb.lineWidth = 1.2
             NSColor(calibratedRed: 0.62, green: 0.45, blue: 0.95, alpha: pulse * alpha).setStroke(); pb.stroke()
-            let cfg = NSImage.SymbolConfiguration(pointSize: 11, weight: .semibold)
-            if let wand = NSImage(systemSymbolName: "wand.and.stars", accessibilityDescription: nil)?.withSymbolConfiguration(cfg) {
-                let tinted = NSImage(size: wand.size, flipped: false) { rect in
-                    wand.draw(in: rect); NSColor.white.set(); rect.fill(using: .sourceAtop); return true
-                }
-                tinted.draw(in: NSRect(x: r.minX + 10, y: c.y - wand.size.height / 2, width: wand.size.width, height: wand.size.height),
-                            from: .zero, operation: .sourceOver, fraction: alpha)
+            if let wand = PillSymbols.tinted("wand.and.stars", size: 11, weight: .semibold, white: 1) {
+                wand.draw(in: NSRect(x: r.minX + 10, y: c.y - wand.size.height / 2, width: wand.size.width, height: wand.size.height),
+                          from: .zero, operation: .sourceOver, fraction: alpha)
             }
             let bc = NSPoint(x: c.x + 8, y: c.y)
             if mode == .command {
@@ -301,13 +366,9 @@ final class PillView: NSView {
             let pb = NSBezierPath(roundedRect: r.insetBy(dx: 0.5, dy: 0.5), xRadius: h / 2 - 0.5, yRadius: h / 2 - 0.5)
             pb.lineWidth = 1.2
             NSColor(calibratedRed: 0.74, green: 0.63, blue: 1.0, alpha: pulse * alpha).setStroke(); pb.stroke()
-            let cfg = NSImage.SymbolConfiguration(pointSize: 10.5, weight: .semibold)
-            if let sp = NSImage(systemSymbolName: "sparkles", accessibilityDescription: nil)?.withSymbolConfiguration(cfg) {
-                let tinted = NSImage(size: sp.size, flipped: false) { rect in
-                    sp.draw(in: rect); NSColor.white.set(); rect.fill(using: .sourceAtop); return true
-                }
-                tinted.draw(in: NSRect(x: r.minX + 10, y: c.y - sp.size.height / 2, width: sp.size.width, height: sp.size.height),
-                            from: .zero, operation: .sourceOver, fraction: alpha)
+            if let sp = PillSymbols.tinted("sparkles", size: 10.5, weight: .semibold, white: 1) {
+                sp.draw(in: NSRect(x: r.minX + 10, y: c.y - sp.size.height / 2, width: sp.size.width, height: sp.size.height),
+                        from: .zero, operation: .sourceOver, fraction: alpha)
             }
             let lx = r.minX + 32, lw = r.maxX - 12 - lx
             for i in 0..<3 {
@@ -324,13 +385,9 @@ final class PillView: NSView {
             let bc = cameraOn ? NSPoint(x: c.x - 8, y: c.y) : c
             drawBars(center: bc, count: 9, maxH: h - 9, t: t, level: max(smoothLevel, smoothLevel2), color: white, barW: 2.2, gap: 2.3)
             if cameraOn, w > 76 {
-                let cfg = NSImage.SymbolConfiguration(pointSize: 9, weight: .semibold)
-                if let g = NSImage(systemSymbolName: "video.fill", accessibilityDescription: "Bildschirm wird mitgeschnitten")?.withSymbolConfiguration(cfg) {
-                    let tinted = NSImage(size: g.size, flipped: false) { rect in
-                        g.draw(in: rect); NSColor.white.withAlphaComponent(0.85).set(); rect.fill(using: .sourceAtop); return true
-                    }
-                    tinted.draw(in: NSRect(x: r.maxX - 11 - g.size.width, y: c.y - g.size.height / 2, width: g.size.width, height: g.size.height),
-                                from: .zero, operation: .sourceOver, fraction: alpha)
+                if let g = PillSymbols.tinted("video.fill", size: 9, weight: .semibold, white: 0.85) {
+                    g.draw(in: NSRect(x: r.maxX - 11 - g.size.width, y: c.y - g.size.height / 2, width: g.size.width, height: g.size.height),
+                           from: .zero, operation: .sourceOver, fraction: alpha)
                 }
             }
         case .prompt(let s):
@@ -401,6 +458,25 @@ final class PillView: NSView {
             let b = NSBezierPath(roundedRect: tr.insetBy(dx: 0.5, dy: 0.5), xRadius: 11.5, yRadius: 11.5); b.lineWidth = 1; b.stroke()
             drawText(tt, at: NSPoint(x: tr.midX, y: tr.midY), size: 11.5, weight: .medium, mono: false,
                      color: NSColor.white.withAlphaComponent(a), alignLeft: false)
+        }
+    }
+
+    /// Kleiner runder ClipVault-Knopf unter der Pille (gleiches Symbol wie ClipVault in der Menüleiste)
+    private func drawClipButton(fade a: CGFloat) {
+        guard a > 0.01, let br = clipButtonRectInView else { return }
+        let over = clipButtonRectInScreen?.insetBy(dx: -2, dy: -2).contains(NSEvent.mouseLocation) ?? false
+        NSGraphicsContext.current?.saveGraphicsState()
+        let sh = NSShadow()
+        sh.shadowColor = NSColor.black.withAlphaComponent(0.35 * a); sh.shadowBlurRadius = 8; sh.shadowOffset = NSSize(width: 0, height: -2)
+        sh.set()
+        NSColor.black.withAlphaComponent((over ? 0.94 : 0.82) * a).setFill()
+        NSBezierPath(ovalIn: br).fill()
+        NSGraphicsContext.current?.restoreGraphicsState()
+        let ring = NSBezierPath(ovalIn: br.insetBy(dx: 0.5, dy: 0.5)); ring.lineWidth = 1
+        NSColor.white.withAlphaComponent((over ? 0.55 : 0.32) * a).setStroke(); ring.stroke()
+        if let g = PillSymbols.tinted("doc.on.clipboard", size: 11, weight: .medium, white: over ? 1 : 0.88) {
+            g.draw(in: NSRect(x: br.midX - g.size.width / 2, y: br.midY - g.size.height / 2, width: g.size.width, height: g.size.height),
+                   from: .zero, operation: .sourceOver, fraction: a)
         }
     }
 
@@ -583,6 +659,12 @@ final class PillView: NSView {
         case .screenRec, .screenRecCountdown:
             onScreenRecClick?()
         case .idle:
+            if hover, let cb = clipButtonRectInView {
+                if cb.insetBy(dx: -2, dy: -2).contains(p) { onClipVaultClick?(); return }
+                // Klick in die Lücke zwischen Pille und Knopf: nichts (keine Sprachauswahl aus Versehen)
+                let pill = capsuleRectInScreen.offsetBy(dx: -(window?.frame.minX ?? 0), dy: -(window?.frame.minY ?? 0))
+                if p.x >= cb.minX - 2, p.x <= cb.maxX + 2, p.y > min(pill.maxY, cb.maxY), p.y < max(pill.minY, cb.minY) { return }
+            }
             if hover { onLanguageClick?() } else { onClick?() }
         case .listening:
             onStop?()
@@ -600,7 +682,7 @@ final class PillView: NSView {
 final class PillController {
     let view: PillView
     private let panel: NSPanel
-    private var timer: Timer?
+    private var timer: AdaptiveTimer?
     private(set) var currentScreen: NSScreen?
     /// Solange true, bleibt die Pille auf ihrem Bildschirm (z. B. während einer Aufnahme).
     var pinnedToScreen = false
@@ -624,9 +706,7 @@ final class PillController {
         panel.orderFrontRegardless()
         applyVisibility()
         reposition(force: true)
-        let t = Timer(timeInterval: 0.05, repeats: true) { [weak self] _ in self?.poll() }
-        RunLoop.main.add(t, forMode: .common)
-        timer = t
+        timer = AdaptiveTimer(interval: 0.05) { [weak self] in self?.poll() }
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil,
                                                queue: .main) { [weak self] _ in self?.reposition(force: true) }
     }
@@ -692,10 +772,28 @@ final class PillController {
         panel.orderFrontRegardless()
     }
 
+    private var stuckLogged = false
+    private var lastStuckCheck = Date.distantPast
+    private var lastMouse = NSPoint(x: -1, y: -1)
     private func poll() {
+        // Nur Diagnose: hinge die Pille selbst auf einem Schreibtisch fest (siehe SpaceGuard), stünde es im Protokoll.
+        // Fragt den Fensterserver – reicht alle 2 s (vorher 20×/s, ~die Hälfte der Kosten dieses Takts).
+        if Date().timeIntervalSince(lastStuckCheck) >= 2 {
+            lastStuckCheck = Date()
+            if SpaceGuard.isStuck(panel) != stuckLogged {
+                stuckLogged.toggle()
+                log(stuckLogged ? "Pille hängt auf einem anderen Schreibtisch fest" : "Pille wieder auf allen Schreibtischen")
+            }
+        }
         let m = NSEvent.mouseLocation
+        let moved = abs(m.x - lastMouse.x) + abs(m.y - lastMouse.y) > 0.5
+        lastMouse = m
         let hit = view.hoverZoneContains(m)
-        let dragging = NSEvent.pressedMouseButtons & 1 == 1 && !panel.ignoresMouseEvents
+        let pressed = NSEvent.pressedMouseButtons != 0
+        let dragging = pressed && NSEvent.pressedMouseButtons & 1 == 1 && !panel.ignoresMouseEvents
+        // Schnell (20 Hz), solange sich etwas tut; in Ruhe 4 Hz – die erste Bewegung schaltet sofort zurück
+        let resting: Bool = { if case .idle = view.mode { return true }; return false }()
+        timer?.set(moved || hit || pressed || !resting ? 0.05 : AdaptiveTimer.restInterval)
         if panel.ignoresMouseEvents == hit || dragging { panel.ignoresMouseEvents = !(hit || dragging) }
         view.setHover(hit)
         // Die Pille wandert mit auf den anderen Bildschirm – in Ruhe, im Meeting, bei der Bildschirmaufnahme und

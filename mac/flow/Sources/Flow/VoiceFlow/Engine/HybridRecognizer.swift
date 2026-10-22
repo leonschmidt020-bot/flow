@@ -268,9 +268,14 @@ enum VocabTrigger {
         let t = " " + norm(text) + " "
         let words = t.split(separator: " ").map(String.init)
         var targets = Set<String>()
+        // Kleingeschriebene kurze Alltagswörter als Ziel („weit“, gelernt aus „Welche“): Abstand/Klang trifft dann
+        // „weil/zeit/wert/weiß“ – 47 von 57 Wörterbuch-Auslösern in einem echten Log (15.–18.10.), je +0,8 s Whisper.
+        // Whisper hilft dort nicht; Hör-Varianten (unten) und exakte Treffer gelten weiter.
+        var common = Set<String>()
         for e in dictionary {
             let w = norm(e.write)
             if !w.isEmpty { targets.insert(w) }
+            if isCommonWordTarget(e.write) { common.insert(w) }
             let h = norm(e.heard)
             guard !h.isEmpty, h != w else { continue }
             // Mehrdeutige Hör-Varianten („Legal“ → Lidl) kann nur Whisper mit Hinweis entscheiden
@@ -281,7 +286,7 @@ enum VocabTrigger {
         // Ziel schon richtig geschrieben da? Dann ist es kein Problem.
         // Sonst: Wortfolgen, die einem Ziel ähnlich sehen (Buchstaben-Abstand) oder klingen (Kölner Phonetik) → Whisper
         let wordCodes = words.map { colognePhonetic($0) }
-        for target in targets {
+        for target in targets where !common.contains(target) {
             if t.contains(" " + target + " ") { continue }
             let n = target.split(separator: " ").count
             let tj = target.replacingOccurrences(of: " ", with: "")
@@ -307,6 +312,12 @@ enum VocabTrigger {
             }
         }
         return nil
+    }
+
+    /// Ein Wort, kleingeschrieben, höchstens 5 Buchstaben – Namen und Marken stehen groß („Lidl“, „KiTaNet“, „Laps“).
+    static func isCommonWordTarget(_ write: String) -> Bool {
+        let w = write.trimmingCharacters(in: .whitespaces)
+        return !w.isEmpty && w.count <= 5 && w.allSatisfy { $0.isLetter && $0.isLowercase }
     }
 
     /// Kölner Phonetik (deutsche Laut-Codes, für englische Namen grob ausreichend). „Aldi“ = „all die“ = 052.

@@ -1,3 +1,4 @@
+import Accelerate
 import FluidAudio
 import Foundation
 
@@ -96,15 +97,42 @@ actor Transcriber {
     }
 
     static func normalized(_ s: [Float]) -> [Float] {
-        guard s.count > 100 else { return s }
+        guard let gain = normalizationGain(s) else { return s }
+        var g = gain, lo: Float = -1, hi: Float = 1
+        let n = vDSP_Length(s.count)
+        return [Float](unsafeUninitializedCapacity: s.count) { out, count in
+            s.withUnsafeBufferPointer { p in
+                vDSP_vsmul(p.baseAddress!, 1, &g, out.baseAddress!, 1, n)
+                vDSP_vclip(out.baseAddress!, 1, &lo, &hi, out.baseAddress!, 1, n)
+            }
+            count = s.count
+        }
+    }
+
+    /// Wie `normalized`, aber an Ort und Stelle (keine zweite Kopie der Spur).
+    /// 18.10.2026: Meeting-Auswertung hielt eine 1-h-Spur (230 MB) beim Angleichen doppelt; Ergebnis bitgleich
+    /// (vDSP: dieselbe Multiplikation + Begrenzung auf ±1, geprüft in --selftest-meeting-audio).
+    static func normalizeInPlace(_ s: inout [Float]) {
+        guard let gain = normalizationGain(s) else { return }
+        var g = gain, lo: Float = -1, hi: Float = 1
+        let n = vDSP_Length(s.count)
+        s.withUnsafeMutableBufferPointer { p in
+            vDSP_vsmul(p.baseAddress!, 1, &g, p.baseAddress!, 1, n)
+            vDSP_vclip(p.baseAddress!, 1, &lo, &hi, p.baseAddress!, 1, n)
+        }
+    }
+
+    /// Verstärkung für `normalized` – nil = bleibt wie es ist
+    private static func normalizationGain(_ s: [Float]) -> Float? {
+        guard s.count > 100 else { return nil }
         // 99,9-%-Spitze (aus jedem 4. Sample), damit einzelne Knackser die Verstärkung nicht bestimmen
         var probe = stride(from: 0, to: s.count, by: 4).map { abs(s[$0]) }
         probe.sort()
         let peak = probe[min(probe.count - 1, Int(Double(probe.count) * 0.999))]
-        guard peak > 1e-4 else { return s }
+        guard peak > 1e-4 else { return nil }
         let gain = min(0.7 / peak, 24)
-        if gain <= 1.05 { return s }
-        return s.map { max(-1, min(1, $0 * gain)) }
+        if gain <= 1.05 { return nil }
+        return gain
     }
 
     /// SentencePiece-Tokens („▁Wort“) zu Wörtern mit Zeiten zusammensetzen.
@@ -152,8 +180,10 @@ actor Diarizer {
             return m
         }
         preparing = p
+        // Auch bei einem Fehler zurücksetzen – sonst bekäme jedes spätere Meeting den gemerkten Fehler (nur ein Sprecher)
+        // und releaseIfIdle gäbe nie wieder frei.
+        defer { preparing = nil }
         manager = try await p.value
-        preparing = nil
     }
 
     struct Turn { let speaker: String; let start: Double; let end: Double }

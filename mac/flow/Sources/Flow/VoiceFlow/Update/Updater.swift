@@ -36,7 +36,11 @@ final class Updater {
     /// Läuft gerade eine Aufnahme, ein Diktat oder ein Meeting? Dann kein Neustart durch ein Update.
     static var appBusy: Bool {
         guard let d = NSApp?.delegate as? AppDelegate else { return false }
-        return (d.meeting?.isRecording ?? false) || (d.dictation?.isBusy ?? false)
+        // + laufende Audiodatei (08.10.2026): ein Update-Neustart mitten im Transkribieren setzte zwar beim letzten Stück
+        // fort, lud aber alle Modelle neu und warf das halbe Stück weg – jetzt wartet das Update (höchstens wie sonst)
+        // + Bildschirmaufnahme (18.10.2026): ein Update-Neustart beendete sie, ohne die MP4 abzuschließen
+        return (d.meeting?.isRecording ?? false) || (d.dictation?.isBusy ?? false) || AudioImport.shared.runningID != nil
+            || ScreenRec.hasLive
     }
 
     /// ./update.sh --pin <tag> → Tag, auf dem festgehalten wird (Updater schweigt)
@@ -71,19 +75,34 @@ final class Updater {
         DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in self?.quickCheck() }
         // Jede Minute nur kurz fragen, ob sich auf GitHub etwas geändert hat (git ls-remote, kein Download);
         // die volle Prüfung läuft nur bei einer Änderung – und sicherheitshalber alle 30 Minuten.
-        let t = Timer(timeInterval: 60, repeats: true) { [weak self] _ in self?.quickCheck() }
+        // Niemand am Mac (≥10 min keine Eingabe) → nur alle 10 min fragen: jede Prüfung startet 2× git (je ~80 ms CPU,
+        // gemessen 18.10. – halb so viel wie die ganze App im Leerlauf). Wer zurückkommt, ist nach ≤1 min wieder aktuell.
+        let t = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            if Date().timeIntervalSince(self.lastQuick) + 5 >= Updater.checkInterval(idleSeconds: Updater.idleSeconds()) { self.quickCheck() }
+        }
+        t.tolerance = 10
         RunLoop.main.add(t, forMode: .common)
         timer = t
+    }
+
+    static func checkInterval(idleSeconds: TimeInterval) -> TimeInterval { idleSeconds < 600 ? 60 : 600 }
+
+    /// Sekunden seit der letzten Maus-/Tastatur-Eingabe
+    static func idleSeconds() -> TimeInterval {
+        CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: CGEventType(rawValue: ~0)!)
     }
 
     // MARK: Prüfen
 
     private var lastRemote: [String: String] = [:]
+    private var lastQuick = Date.distantPast
     private var lastFull = Date.distantPast
 
     /// Schnell: stimmt der Stand auf GitHub noch mit dem zuletzt gesehenen überein?
     func quickCheck() {
         guard Updater.enabled, !installing, Updater.pinnedTag == nil, let dir = Updater.sourceDir else { return }
+        lastQuick = Date()
         queue.async {
             var changed = false
             // Kanal = der Branch des Klons (Standard `main`); gefragt wird nur dessen Spitze auf dem Server
@@ -180,7 +199,7 @@ final class Updater {
     private func offer(_ p: Pending) {
         // Nie mitten in einer Aufnahme stören – dann in 10 Minuten nochmal
         let d = AppDelegate.shared
-        if d.meeting.isRecording || d.dictation.isBusy {
+        if d.meeting.isRecording || d.dictation.isBusy || ScreenRec.hasLive {
             DispatchQueue.main.asyncAfter(deadline: .now() + 600) { [weak self] in self?.offer(p) }
             return
         }

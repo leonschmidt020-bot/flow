@@ -154,6 +154,9 @@ final class DictationController {
         mouseSession = MouseTarget.shared.begin(enabled: viaHotkey && Settings.shared.mouseTarget)
         ScreenContext.shared.begin()      // Fenstertext für Namen/Begriffe lesen – im Hintergrund, Mikro wartet nicht
         tap.begin()   // übernimmt die letzten 0,4 s vor dem Tastendruck, falls das Mikro schon lief
+        // Sicherung: Gesagtes alle 2 s auf die Platte (übersteht Abbruch, Zeitlimit und Absturz)
+        backupID = nil
+        DictationBackup.shared.begin { [weak self] i in self?.tap.peek(from: i) ?? [] }
         voiceSession += 1
         prefeedFrom = 0
         prefeedBusy = false
@@ -203,7 +206,10 @@ final class DictationController {
     func cancel(silent: Bool) {
         startSound?.cancel()
         maxTimer?.invalidate()
-        _ = tap.end()
+        let heard = tap.end()
+        // Abgebrochen, aber schon etwas gesagt? Sichern und im Hintergrund trotzdem erkennen → Zwischenablage
+        let rescue = !isCommand && heard.count >= 16000 * 5 / 2 && (Dictation.peak(heard) > 0.05 || WhisperDetector.hasWhisperSpeech(heard))
+        let bid = DictationBackup.shared.finish(rescue ? heard : [], status: .abgebrochen)
         _ = sysTap.end()
         chunkTimer?.invalidate(); chunkTimer = nil
         chunkTasks.forEach { $0.cancel() }; chunkTasks = []
@@ -218,7 +224,76 @@ final class DictationController {
         pill.view.level = 0
         pill.view.mode = restingMode()
         pill.pinnedToScreen = false
-        if !silent { pill.view.showToast("Abgebrochen") }
+        if rescue, let bid {
+            pill.view.showToast("Abgebrochen – dein Gesagtes wird gesichert …", seconds: 2.2)
+            rescueRecognize(bid, samples: heard)
+        } else if !silent { pill.view.showToast("Abgebrochen") }
+    }
+
+    // MARK: Sicherung nacherkennen
+
+    /// Sicherungs-ID des laufenden/letzten Diktats (für Zeitlimit/Esc beim Erkennen)
+    private var backupID: String?
+    private var rescuing = Set<String>()
+
+    /// Gesicherten Ton im Hintergrund erkennen (in Stücken, ohne Zeitlimit) → Zwischenablage + Verlauf
+    func rescueRecognize(_ id: String, samples given: [Float]? = nil) {
+        guard !rescuing.contains(id) else { return }
+        rescuing.insert(id)
+        Task.detached(priority: .userInitiated) { [weak self] in
+            guard let self else { return }
+            // ohne `given` (Esc beim Erkennen, Menü, Absturz): liest über die Sicherungs-Queue → nie eine halb geschriebene Datei
+            let audio = given ?? DictationBackup.shared.samples(id)
+            let t0 = Date()
+            let text = await self.recognizeLong(audio)
+            log(String(format: "Diktat-Sicherung %@: %.0f s Ton nacherkannt in %.1f s, %d Zeichen", id, Double(audio.count) / 16000,
+                       Date().timeIntervalSince(t0), text.count))
+            await MainActor.run {
+                self.rescuing.remove(id)
+                if text.isEmpty {
+                    DictationBackup.shared.update(id, status: .leer)
+                    self.pill.view.showToast("Sicherung: nichts erkannt", seconds: 2.5)
+                    return
+                }
+                DictationBackup.shared.update(id, text: text)
+                DictationHistory.shared.add(text: text, duration: Double(audio.count) / 16000)
+                self.copyRescued(text)
+            }
+        }
+    }
+
+    /// Nicht mitten in ein laufendes Diktat/Einfügen hinein kopieren – kurz warten, bis Flow frei ist
+    private func copyRescued(_ text: String, tries: Int = 0) {
+        if state != .idle && tries < 120 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.copyRescued(text, tries: tries + 1) }
+            return
+        }
+        let pb = NSPasteboard.general
+        pb.clearContents(); pb.setString(text, forType: .string)
+        pill.view.showToast("Gesichert: dein Text liegt in der Zwischenablage (⌘V)", seconds: 3.2)
+        log("Diktat-Sicherung: \(text.count) Zeichen in die Zwischenablage")
+    }
+
+    /// Lange Aufnahme stückweise erkennen (an Sprechpausen, je ~20–30 s), Zusammenhang vom vorigen Stück
+    private func recognizeLong(_ audio: [Float]) async -> String {
+        let settings = Settings.shared
+        var parts: [String] = []
+        var start = 0
+        while start < audio.count {
+            let rest = Array(audio[start...])
+            var cut = rest.count
+            if rest.count > 16000 * 30 {
+                cut = Dictation.findPause(rest, minOffset: 16000 * 20) ?? Dictation.quietestPoint(rest, from: 16000 * 20) ?? 16000 * 28
+                cut = max(16000 * 5, min(cut, rest.count))
+            }
+            let piece = Array(rest[..<cut])
+            if EchoFilter.hasSound(piece) || WhisperDetector.hasWhisperSpeech(piece) {
+                let t = (try? await recognize(piece, settings: settings, context: parts.last ?? "")) ?? ""
+                if !t.isEmpty { parts.append(t.trimmingCharacters(in: .whitespacesAndNewlines)) }
+            }
+            start += cut
+        }
+        return parts.joined(separator: " ")
     }
 
     func finish() {
@@ -237,6 +312,14 @@ final class DictationController {
     /// Erkennung abbrechen (Esc oder Zeitlimit) – Pille zurück, nichts einfügen
     private func abortTranscription(_ message: String) {
         transcribeJob?.cancel(); transcribeJob = nil
+        // Ton ist gesichert → trotzdem erkennen (ohne Zeitlimit) und in die Zwischenablage
+        let rescued = backupID != nil
+        if let bid = backupID {
+            backupID = nil
+            DictationBackup.shared.update(bid, status: message.contains("lange") ? .zeitlimit : .abgebrochen)
+            rescueRecognize(bid)
+            log("Diktat-Sicherung: \(message) – erkenne im Hintergrund weiter")
+        }
         chunkTasks.forEach { $0.cancel() }; chunkTasks = []
         discardVoiceSession()
         sysStream.reset()
@@ -244,7 +327,7 @@ final class DictationController {
         state = .idle
         pill.view.mode = restingMode()
         pill.pinnedToScreen = false
-        pill.view.showToast(message, seconds: 2)
+        pill.view.showToast(rescued ? message + " – Text kommt gleich in die Zwischenablage" : message, seconds: 2.4)
         log("Erkennung abgebrochen: \(message)")
     }
 
@@ -267,6 +350,8 @@ final class DictationController {
 
     private func collect() {
         let samples = tap.end()
+        let bid = DictationBackup.shared.finish(samples, status: .fertig)
+        backupID = bid
         let system = sysTap.end()
         chunkTimer?.invalidate(); chunkTimer = nil
         scheduleWarmStop()
@@ -277,11 +362,12 @@ final class DictationController {
             mic.stopAsync()
             state = .idle; pill.view.mode = restingMode(); pill.pinnedToScreen = false
             pill.view.showToast("Mikrofon neu gestartet – bitte nochmal", seconds: 2.5)
+            if let bid { DictationBackup.shared.discard(bid) }; backupID = nil
             return
         }
         let dur = Double(samples.count) / 16000
         pill.view.level = 0
-        let debugID = Dictation.saveDebug(samples)
+        let debugID = Dictation.saveDebug(backupID: bid)
         // Flüstern ist leise (Pegel oft unter 0,05) – geflüsterte Sprache nicht als „Nichts gehört“ verwerfen
         guard dur > 0.4, peak > 0.05 || WhisperDetector.hasWhisperSpeech(samples) else {
             sysStream.reset(); TempoGuard.disarm()
@@ -289,6 +375,7 @@ final class DictationController {
             pill.view.mode = restingMode()
             pill.pinnedToScreen = false
             if dur > 0.4 { pill.view.showToast("Nichts gehört") }
+            if let bid { DictationBackup.shared.discard(bid) }; backupID = nil
             return
         }
         playStop()
@@ -426,7 +513,7 @@ final class DictationController {
             }
             log(String(format: "Diktat %.1fs → Erkennung %.2fs, gesamt %.2fs, %d Wörter", dur, asrTime, Date().timeIntervalSince(t0), words)
                 + (settings.logTexts ? ": " + cleaned : ""))
-            Dictation.saveDebugText(debugID, cleaned)
+            Dictation.saveDebugText(debugID, cleaned, logTexts: settings.logTexts)
             if Task.isCancelled { return }
             // Agent-Prompt-Erkennung schon hier (Hintergrund) – nach dem Einfügen kommt die Karte dann sofort.
             // Kurze Diktate warten nicht auf den Fenstertitel.
@@ -456,8 +543,10 @@ final class DictationController {
                            tReady.timeIntervalSince(tSys) - sysWait, tPaste.timeIntervalSince(tReady), done.timeIntervalSince(tPaste),
                            expired > 0 ? " – Tempo-Garantie: Parakeet-Ergebnis (Whisper zu langsam)" : ""))
                 if !cleaned.isEmpty { DictationHistory.shared.add(text: cleaned, duration: dur) }
+                if let bid { DictationBackup.shared.update(bid, status: cleaned.isEmpty ? .leer : .fertig, text: cleaned) }
+                if self.backupID == bid { self.backupID = nil }
             }
-            if cleaned.isEmpty { log(String(format: "Leer erkannt – Spitzenpegel %.2f (letzte Aufnahme: ~/.config/flow/letzte-aufnahme.wav)", self.peak)) }
+            if cleaned.isEmpty { log(String(format: "Leer erkannt – Spitzenpegel %.2f", self.peak) + (bid != nil ? " (letzte Aufnahme: ~/.config/flow/letzte-aufnahme.wav)" : "")) }
         }
         transcribeJob = job
         let mySession = voiceSession            // Zeitlimit gilt nur für DIESES Diktat, nie für ein später gestartetes
@@ -677,37 +766,49 @@ enum Dictation {
         return mi * 480
     }
 
-    /// Die letzten 5 Diktate (Ton + erkannter Text) zur Fehlersuche: ~/.config/flow/diktate/
-    /// Werden mit der normalen Aufräum-Frist ohnehin nach wenigen Tagen gelöscht (nur 5 Stück).
+    /// Die letzten 5 Diktate zur Fehlersuche: ~/.config/flow/diktate/ (Ton; erkannter Text nur mit „Texte mitschreiben“).
+    /// Werden mit der normalen Aufräum-Frist ohnehin nach wenigen Tagen gelöscht (nur 5 Stück). Liest u. a. MemProbe.
     static let debugDir: URL = {
         let u = Paths.base.appendingPathComponent("diktate")
         try? FileManager.default.createDirectory(at: u, withIntermediateDirectories: true)
         return u
     }()
 
+    /// 18.10.2026: diktate/<id>.wav und letzte-aufnahme.wav sind harte Links auf die Diktat-Sicherung – vorher wurde der Ton
+    /// hier ein drittes Mal geschrieben (+32 KB je gesprochener Sekunde). Läuft auf der Sicherungs-Queue, also erst wenn die
+    /// WAV fertig ist; ein späteres „Nichts gehört“ (discard) nimmt nur den Sicherungs-Namen weg, die Links bleiben.
+    /// Ohne Sicherung (unter 1 s) gibt es keinen Eintrag, und letzte-aufnahme.wav verschwindet statt auf ein älteres Diktat zu zeigen.
     @discardableResult
-    static func saveDebug(_ samples: [Float]) -> String {
+    static func saveDebug(backupID: String?, backup: DictationBackup = .shared, dir: URL = debugDir,
+                          latest: URL = Paths.base.appendingPathComponent("letzte-aufnahme.wav")) -> String {
         let df = DateFormatter(); df.dateFormat = "yyyy-MM-dd_HHmmss"
         let id = df.string(from: Date())
-        DispatchQueue.global(qos: .utility).async {
-            let url = debugDir.appendingPathComponent("\(id).wav")
-            if let w = try? WavWriter(url: url) { w.write(samples); w.close() }
-            // letzte-aufnahme.wav bleibt als Abkürzung auf das neueste
-            let latest = Paths.base.appendingPathComponent("letzte-aufnahme.wav")
-            try? FileManager.default.removeItem(at: latest)
-            try? FileManager.default.copyItem(at: url, to: latest)
+        backup.afterWrites {
+            let fm = FileManager.default
+            try? fm.removeItem(at: latest)
+            guard let backupID else { return }
+            let src = backup.fileURL(backupID)
+            guard fm.fileExists(atPath: src.path) else { return }
+            let url = dir.appendingPathComponent("\(id).wav")
+            try? fm.removeItem(at: url)
+            try? fm.linkItem(at: src, to: url)
+            try? fm.linkItem(at: src, to: latest)   // Abkürzung auf das neueste
             // nur die neuesten 5 behalten
-            let files = ((try? FileManager.default.contentsOfDirectory(atPath: debugDir.path)) ?? []).filter { $0.hasSuffix(".wav") }.sorted()
+            let files = ((try? fm.contentsOfDirectory(atPath: dir.path)) ?? []).filter { $0.hasSuffix(".wav") }.sorted()
             for f in files.dropLast(5) {
-                try? FileManager.default.removeItem(at: debugDir.appendingPathComponent(f))
-                try? FileManager.default.removeItem(at: debugDir.appendingPathComponent(f.replacingOccurrences(of: ".wav", with: ".txt")))
+                try? fm.removeItem(at: dir.appendingPathComponent(f))
+                try? fm.removeItem(at: dir.appendingPathComponent(f.replacingOccurrences(of: ".wav", with: ".txt")))
             }
         }
         return id
     }
 
-    static func saveDebugText(_ id: String, _ text: String) {
-        try? text.write(to: debugDir.appendingPathComponent("\(id).txt"), atomically: true, encoding: .utf8)
+    /// 18.10.2026: Text nur noch mit „Diktierte Texte im Protokoll mitschreiben“ – stand vorher immer da
+    static func saveDebugText(_ id: String, _ text: String, logTexts: Bool, dir: URL = debugDir) {
+        guard logTexts else { return }
+        let url = dir.appendingPathComponent("\(id).txt")
+        try? text.write(to: url, atomically: true, encoding: .utf8)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
     }
 }
 

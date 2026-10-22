@@ -91,6 +91,12 @@ enum CLI {
             if let c = AudioImportCLI.run(args) { return c }
             if let c = SpeedCLI.run(args) { return c }
             if let c = APCLI.run(args) { return c }
+            if let c = DictationBackupCLI.run(args) { return c }
+            if let c = EfficiencyCLI.run(args) { return c }
+            if let c = MeetingAudioCLI.run(args) { return c }
+            if let c = LogHygieneCLI.run(args) { return c }
+            if let c = ScreenRecGuardCLI.run(args) { return c }
+            if let c = RamHygieneCLI.run(args) { return c }
             // Unbekannter Befehl: NIE die App starten (sonst läuft ein zweites Flow mit und fügt alles doppelt ein)
             FileHandle.standardError.write("Unbekannter Befehl: \(cmd)\n".data(using: .utf8)!)
             return 2
@@ -294,7 +300,7 @@ enum CLI {
         _ = NSApplication.shared
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         let states: [(String, PillView.Mode, Float, Bool)] = [
-            ("1_ruhe", .idle, 0, false), ("2_ruhe_hover", .idle, 0, true), ("3_sprechen_leise", .listening, 0.2, false),
+            ("1_ruhe", .idle, 0, false), ("2_ruhe_hover", .idle, 0, true), ("2b_ruhe_hover_clipvault", .idle, 0, true), ("3_sprechen_leise", .listening, 0.2, false),
             ("4_sprechen_laut", .listening, 0.85, false), ("5_freihand", .handsFree, 0.6, false),
             ("6_verarbeiten", .transcribing, 0, false), ("7_meeting", .meeting(start: Date().addingTimeInterval(-754)), 0.5, false),
             ("8_frage", .prompt("Meeting erkannt · Zoom"), 0, false), ("9_laden", .loading(0.43), 0, false), ("8b_lernen", .question("„ID“ → „Lidl“ merken?", "Speichern"), 0, false),
@@ -313,6 +319,7 @@ enum CLI {
             v.vertical = name.hasPrefix("v")
             v.mode = mode
             v.level = lv
+            if name.hasSuffix("clipvault") { v.clipVaultCheck = { true } }
             v.setHover(hover)
             if name == "4_sprechen_laut" || name == "v2_seite_sprechen" { v.showToast("In Zwischenablage kopiert", seconds: 100) }
             for _ in 0..<90 { v.tick() }

@@ -23,9 +23,12 @@ ist. Dazu kommt **ClipVault**, ein Zwischenablage-Verlauf (⌘⇧V). Beide laufe
   (Flow)“) nimmt den Bildschirm unter der Maus auf – bei mehreren Bildschirmen zeigt ein roter Rahmen, welcher. Ton:
   Ohne Ton · Mikrofon · Systemton. Schalter „Maus leuchtet“ (goldenes Leuchten + Klick-Ring fürs Erklären). Countdown
   3 · 2 · 1 in der Pille, dann ● Laufzeit; drüberfahren → „■ Beenden“ (oder nochmal ⌃⌥R). Pille und Karten von Flow
-  sind nicht im Video. Danach sofort „Aufnahme fertig“: **Kopieren** legt die echte MP4-Datei in die Zwischenablage –
-  „Nur Video“ oder „Video + Transkript + Bilder“ (mit Mikrofon: lokales Transkript mit Zeitmarken über Parakeet) bzw.
-  „Video + Bilder“: Schlüsselbilder bei Klicks/Satzanfängen und Mausspur-Bilder als Text-Liste für Claude Code & Co.
+  sind nicht im Video. Wechselt die Maus den Bildschirm, folgt das Video (gleiche Datei). **⌥ gedrückt halten** = roter
+  Zeichenstift: Markierungen landen als eigener Ausschnitt samt dem, was dabei gesagt wurde, im Kontext. Danach sofort
+  „Aufnahme fertig“: **Kopieren** legt die echte MP4-Datei in die Zwischenablage – „Nur Video“, „Mit Kontext“
+  (lokales Transkript mit Zeitmarken, Schlüsselbilder bei Klicks/Satzanfängen, Mausspur-Bilder als Text-Liste für
+  Claude Code & Co.; wer sofort ⌘V drückt, bekommt trotzdem alles – das Einfügen wartet, bis der Kontext fertig ist)
+  oder „Als Auftrag“ (mit Claude-CLI: Claude schreibt aus Video, Bildern und Transkript einen Auftrag).
   Gespeichert wird im Ordner der macOS-Bildschirmfotos (sonst Schreibtisch), Bilder in „<Video> – Bilder“.
   Kontrollzentrum-Knopf: Systemeinstellungen → Kontrollzentrum bzw. „Steuerelemente bearbeiten“ → „Bildschirm aufnehmen
   (Flow)“. Er ist optional – klappt sein Bau nicht, läuft Flow ohne ihn (⌃⌥R geht immer).
@@ -34,10 +37,15 @@ ist. Dazu kommt **ClipVault**, ein Zwischenablage-Verlauf (⌘⇧V). Beide laufe
   Original bleibt immer erhalten, Verlauf unter Scratchpad › Agent-Prompts. Mit Claude-CLI formuliert Claude, ohne sie
   sortiert Flow lokal nach Regeln.
 - Hub-Fenster mit Insights, Wörterbuch, Snippets, Stil, Transforms, Scratchpad, Training.
+- Diktat-Sicherung: jedes Diktat wird beim Sprechen mitgesichert – bei Abbruch, Zeitlimit oder Absturz erkennt Flow den
+  Text nachträglich und legt ihn in die Zwischenablage (Menü „Diktat-Sicherungen“).
+- Sparsam: Meeting-Ton wird nach der Auswertung geprüft als AAC gespeichert (~230 → ~32 MB pro Stunde), Whisper parkt
+  nach 3 min ohne Diktat (~0,6 GB RAM frei), Bildschirmaufnahme stoppt bei wenig Speicherplatz.
 - Updates: roter Punkt an der Pille → „Installieren“. Sicherer Weg: prüfen → tauschen → Lebenszeichen → sonst zurück.
 
 **ClipVault (Zwischenablage)**
 - ⌘⇧V öffnet den Verlauf dort, wo die Maus ist: Text, Links (mit Vorschau), Bilder (mit Texterkennung), Dateien.
+  Oder: über die ruhende Pille fahren → kleiner Knopf darunter öffnet den Verlauf.
 - Anheften und Bereiche (Sammlungen), zwei Tage / 200 Einträge Verlauf, Doppelte werden zusammengefasst.
 - Optional: **einen Tresor mit einem Freund/Partner teilen** – Ende-zu-Ende verschlüsselt über deinen *eigenen*
   kostenlosen Cloudflare Worker ([Anleitung, 5 Minuten](clipvault/sync-worker/README.md)). Standard: aus.
@@ -143,8 +151,12 @@ with speaker separation, audio import, "only my voice" filtering, voice commands
 shared vault), agent prompts (say "Prompt: …" and ramble – Flow turns it into a structured task for a coding agent,
 keeping your original), screen recording (⌃⌥R or a Control Center button: records the screen under the mouse with no
 sound, microphone or system audio, optional cursor glow, Flow's own pill/cards excluded; afterwards "Copy" puts the real
-MP4 on the clipboard – video only, or together with a local transcript, keyframes and mouse-trail images for coding
-agents; saved to your macOS screenshot folder, else the Desktop), and a hub window. ClipVault: history of text/links/images/files, pinning, collections, OCR, and optional
+MP4 on the clipboard – "Video only", "With context" (local transcript, keyframes and mouse-trail images for coding
+agents; pasting right away still gets everything, the paste waits for the context) or "As task" (with the Claude CLI);
+hold ⌥ to draw a red marker that becomes its own cropped image; the video follows the mouse across screens; saved to
+your macOS screenshot folder, else the Desktop), dictation backup (an interrupted or crashed dictation is recognized
+afterwards and put on the clipboard), compact storage (meeting audio as AAC, Whisper unloads after 3 idle minutes),
+and a hub window. Hovering the idle pill shows a small button that opens ClipVault. ClipVault: history of text/links/images/files, pinning, collections, OCR, and optional
 end-to-end encrypted sharing of one vault with one friend via **your own** free Cloudflare Worker
 ([5-minute guide](clipvault/sync-worker/README.md)). Sharing is off by default.
 

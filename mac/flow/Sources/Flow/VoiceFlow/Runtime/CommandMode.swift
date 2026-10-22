@@ -262,7 +262,9 @@ final class CommandMode {
     }
 
     static func snapshot(_ pb: NSPasteboard) -> [[NSPasteboard.PasteboardType: Data]] {
-        (pb.pasteboardItems ?? []).map { item in
+        // Bildschirmaufnahme „Mit Kontext“: Versprechen nicht abwarten, nur merken (ScreenRecClip)
+        if let m = ScreenRecClip.snapshotMarker(pb) { return m }
+        return (pb.pasteboardItems ?? []).map { item in
             var d: [NSPasteboard.PasteboardType: Data] = [:]
             for t in item.types { if let v = item.data(forType: t) { d[t] = v } }
             return d
@@ -270,6 +272,8 @@ final class CommandMode {
     }
 
     static func restore(_ items: [[NSPasteboard.PasteboardType: Data]], into pb: NSPasteboard) {
+        if ScreenRecClip.restore(items, into: pb) { return }
+        FlowPasteboard.noteOwnWrite()
         pb.clearContents()
         guard !items.isEmpty else { return }
         pb.writeObjects(items.map { d in

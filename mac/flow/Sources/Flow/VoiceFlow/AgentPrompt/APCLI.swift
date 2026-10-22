@@ -165,6 +165,12 @@ enum APCLI {
         ]
         for (name, phase) in extra where APCard.renderPNG(phase, to: d.appendingPathComponent("\(name).png"), pill: pillBottom) { ok += 1 }
         APCardStyle.claudeAvailable = { true }
+        // Bildschirmaufnahme „Als Auftrag“: gleiche Karte mit Restzeit + Fortschritt
+        let job = APCardJob(chip: "Auftrag", title: "Auftrag wird mit KI gebaut …",
+                            line: "Claude liest Video, Bilder, Transkript und Mausspuren und schreibt den Auftrag.",
+                            expected: 20, note: "Video liegt schon in der Zwischenablage")
+        if APCard.renderPNG(.building(partial: "", words: 0, started: now.addingTimeInterval(-8)), to: d.appendingPathComponent("6a_auftrag_baut.png"), pill: pillBottom, job: job) { ok += 1 }
+        if APCard.renderPNG(.building(partial: "", words: 0, started: now.addingTimeInterval(-25)), to: d.appendingPathComponent("6b_auftrag_gleich.png"), pill: pillBottom, job: job) { ok += 1 }
         // Hub: Scratchpad › Agent-Prompts (eigener Test-Speicher)
         let hubDir = d.appendingPathComponent("hub-store")
         let store = APStore(dir: hubDir, load: false)
@@ -181,7 +187,7 @@ enum APCLI {
             if let png = rep.representation(using: .png, properties: [:]), (try? png.write(to: d.appendingPathComponent("6_hub_prompts.png"))) != nil { ok += 1 }
         }
         try? FileManager.default.removeItem(at: hubDir)
-        let total = shots.count + extra.count + 2
+        let total = shots.count + extra.count + 4
         print("\(ok)/\(total) Bilder nach \(dir)")
         return ok == total ? 0 : 1
     }
@@ -814,8 +820,8 @@ extension APSelfTest {
         t.check(isOffer(pres.phase) && ms < 100, "Vorschlag erscheint sofort nach dem Einfügen (ohne 0,7-s-Pause)", "\(ms) ms")
         t.check((flow.lastOfferMs ?? 9999) < 1000, "gemessen: Einfügen → Karte lesbar < 1 s", "\(flow.lastOfferMs ?? -1) ms")
         t.check(snaps == 1 && flow.offer?.pasted.text.hasPrefix(" Okay") == true, "Stelle wird gemerkt (genau eingefügter Text inkl. Leerzeichen)")
-        // Box bleibt → Karte bleibt
-        spin(0.15) { false }
+        // Box bleibt → Karte bleibt (bis 1 s auf die 2. Lesung warten – unter Last im Tor kam sie nach 0,15 s noch nicht)
+        spin(1.0) { probes >= 2 }
         t.check(isOffer(pres.phase) && probes >= 2, "Original noch da → Karte bleibt (alle 250 ms nachgelesen)", "\(probes) Lesungen")
         // Abgeschickt (Box leer / neuer ❯-Block) → leise weg
         verdict = .sent

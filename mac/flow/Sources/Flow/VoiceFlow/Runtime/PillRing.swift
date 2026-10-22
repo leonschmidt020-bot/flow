@@ -22,6 +22,7 @@ final class PillRing {
     private var panel: NSPanel?
     private let model = PillRingModel()
     private var timer: Timer?
+    private var onScreenTick = 0
     /// Abstand des Rahmens zur Pille (pt) – Platz fürs Leuchten
     static let gap: CGFloat = 3, glow: CGFloat = 8
 
@@ -38,6 +39,7 @@ final class PillRing {
     // MARK: Fenster
 
     private func show(_ kind: Kind, sweep: Bool) {
+        panel = SpaceGuard.fresh(panel, "Rahmen")
         if panel == nil {
             let p = SmartBadgePanel(size: NSSize(width: 60, height: 20), acceptsMouse: false)
             p.level = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 1)
@@ -79,6 +81,16 @@ final class PillRing {
     /// Rahmen der Pille folgen (sie wächst beim Drüberfahren und wandert mit der Maus über Bildschirme)
     private func position() {
         guard let p = panel, let pill = VFNotify.shared.pillAnchor?(), pill.width > 0 else { panel?.orderOut(nil); return }
+        // Rahmen hängt auf einem anderen Schreibtisch fest → neu anlegen (ohne erneutes Zeichnen)
+        if SpaceGuard.isStuck(p), let kind = current { show(kind, sweep: false); return }
+        // etwa jede Sekunde den Fensterserver fragen, ob der Rahmen wirklich zu sehen ist (10.10.2026)
+        onScreenTick += 1
+        if onScreenTick % 30 == 0, p.isVisible, p.alphaValue > 0.5 {
+            panel = SpaceGuard.ensureShown(p, "Rahmen") {
+                let n = SmartBadgePanel(size: NSSize(width: 60, height: 20), acceptsMouse: false)
+                n.level = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 1); return n
+            }
+        }
         // Nicht während Diktat/Meeting-Aufnahme (Pille ist dann beschäftigt) – Rahmen kurz ausblenden
         let idle = SmartFlow.shared.pillIsIdle() && !SmartFlow.shared.isBusy()
         if !idle { if p.alphaValue > 0 { p.alphaValue = 0 }; return }

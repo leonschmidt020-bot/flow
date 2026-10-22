@@ -24,9 +24,10 @@ final class AppState: NSObject {
             b.image?.isTemplate = true
             b.target = self; b.action = #selector(toggle)
         }
-        Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { [weak self] _ in self?.tick() }
-        Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in self?.checkToast() }
-        Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in self?.checkIngest() }
+        // Toleranz: macOS darf die Weckzeiten der drei Abfragen bündeln (18.10.2026, vorher ohne → ~27 einzelne Weckungen/s)
+        Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { [weak self] _ in self?.tick() }.tolerance = 0.06
+        Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in self?.checkToast() }.tolerance = 0.01
+        Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in self?.checkIngest() }.tolerance = 0.04
         // Zustandsdatei aktuell halten (fuer `clipvault doctor`)
         Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in self?.writeStatus() }
         cvStatusWriter = { [weak self] in self?.writeStatus() }
@@ -66,11 +67,31 @@ final class AppState: NSObject {
         // EINZELNE Bilddatei (lokal kopiert ODER vom iPhone)? -> ECHTES Bild laden (nicht das Datei-Icon!)
         // + echte Bilddaten in die Zwischenablage, damit es ÜBERALL als Bild einfügbar ist
         if let urls = (pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL])?.filter({ FileManager.default.fileExists(atPath: $0.path) }), !urls.isEmpty {
-            if urls.count == 1, imgExt.contains(urls[0].pathExtension.lowercased()), let nsi = NSImage(contentsOf: urls[0]), let png = nsi.pngData() {
-                Store.shared.addImage(png, source: src, origin: urls[0].path)
-                pb.clearContents(); pb.setData(png, forType: .png)
-                if let tiff = nsi.tiffRepresentation { pb.setData(tiff, forType: .tiff) }
-                if other == nil { lastChange = pb.changeCount }   // eigene Änderung nicht erneut verarbeiten
+            if urls.count == 1, imgExt.contains(urls[0].pathExtension.lowercased()) {
+                // 09.10.2026: iPhone-Fotos (HEIC 12 MP) umzuwandeln dauerte 1,2 s AUF DEM HAUPTFADEN – kopierte man in der Zeit
+                // schon das nächste Bild, war die Kopie dazwischen weg (6 kopiert, 4 im Verlauf). Jetzt: Datei sofort merken,
+                // umwandeln im Hintergrund (ImageIO, ~0,45 s), danach eintragen. Die Zwischenablage wird nur dann durch das
+                // Bild ersetzt, wenn seitdem nichts Neues kopiert hat.
+                let url = urls[0], cc = pb.changeCount
+                if other != nil {   // Selbsttest: wie bisher sofort
+                    guard let png = ClipImageConvert.png(url) else { return nil }
+                    Store.shared.addImage(png, source: src, origin: url.path)
+                    pb.clearContents(); pb.setData(png, forType: .png)
+                    return "Bild in Zwischenablage"
+                }
+                ClipImageConvert.queue.async { [weak self] in
+                    let png = ClipImageConvert.png(url), tiff = png.flatMap(ClipImageConvert.tiff)
+                    DispatchQueue.main.async {
+                        guard let self, let png else { cvLog("Bild nicht lesbar — \(url.lastPathComponent)"); return }
+                        Store.shared.addImage(png, source: src, origin: url.path)
+                        if self.pb.changeCount == cc {
+                            self.pb.clearContents(); self.pb.setData(png, forType: .png)
+                            if let tiff { self.pb.setData(tiff, forType: .tiff) }
+                            self.lastChange = self.pb.changeCount   // eigene Änderung nicht erneut verarbeiten
+                        }
+                        self.panel.reloadIfVisible()
+                    }
+                }
                 return "Bild in Zwischenablage"
             }
             Store.shared.addFiles(urls, source: src); return urls.count > 1 ? "Dateien in Zwischenablage" : "Datei in Zwischenablage"
@@ -193,12 +214,12 @@ final class AppState: NSObject {
         Store.shared.moveToTop(item); pb.clearContents()
         if item.kind == .text, let t = item.text { pb.setString(t, forType: .string) }
         else if item.kind == .file, let refs = item.files {
-            let urls: [NSURL] = refs.compactMap { r in
-                if FileManager.default.fileExists(atPath: r.orig) { return NSURL(fileURLWithPath: r.orig) }
-                if let st = r.stored { let p = Store.shared.dir.appendingPathComponent(st).path; if FileManager.default.fileExists(atPath: p) { return NSURL(fileURLWithPath: p) } }
+            let urls: [URL] = refs.compactMap { r in
+                if FileManager.default.fileExists(atPath: r.orig) { return URL(fileURLWithPath: r.orig) }
+                if let st = r.stored { let p = Store.shared.dir.appendingPathComponent(st).path; if FileManager.default.fileExists(atPath: p) { return URL(fileURLWithPath: p) } }
                 return nil
             }
-            if !urls.isEmpty { pb.writeObjects(urls) }
+            MultiCopy.writeFiles(urls, to: pb)
         }
         else if let d = Store.shared.dataFor(item) { pb.setData(d, forType: .png) }
         lastChange = pb.changeCount
@@ -246,4 +267,28 @@ final class AppState: NSObject {
         """
         try? s.write(toFile: CV_DIR + "status.txt", atomically: true, encoding: .utf8)
     }
+}
+
+
+/// Bild-Datei → PNG ohne den Hauptfaden zu blockieren (ImageIO: HEIC 12 MP in ~0,45 s statt 1,2 s über NSImage)
+enum ClipImageConvert {
+    static let queue = DispatchQueue(label: "clipvault.image-convert", qos: .userInitiated)   // seriell: Reihenfolge bleibt
+    static func png(_ url: URL) -> Data? {
+        if url.pathExtension.lowercased() == "png", let d = try? Data(contentsOf: url) { return d }
+        if let src = CGImageSourceCreateWithURL(url as CFURL, nil),
+           let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any],
+           let w = props[kCGImagePropertyPixelWidth] as? Int, let h = props[kCGImagePropertyPixelHeight] as? Int,
+           // volle Größe, Drehung (EXIF, iPhone hochkant) gleich in die Pixel – wie vorher über NSImage
+           let img = CGImageSourceCreateThumbnailAtIndex(src, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true,
+                                                                   kCGImageSourceCreateThumbnailWithTransform: true,
+                                                                   kCGImageSourceThumbnailMaxPixelSize: max(w, h)] as CFDictionary) {
+            let out = NSMutableData()
+            if let dst = CGImageDestinationCreateWithData(out, "public.png" as CFString, 1, nil) {
+                CGImageDestinationAddImage(dst, img, nil)
+                if CGImageDestinationFinalize(dst) { return out as Data }
+            }
+        }
+        return autoreleasepool { NSImage(contentsOf: url)?.pngData() }
+    }
+    static func tiff(_ png: Data) -> Data? { autoreleasepool { NSBitmapImageRep(data: png)?.tiffRepresentation } }
 }

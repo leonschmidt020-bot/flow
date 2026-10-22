@@ -77,6 +77,10 @@ struct AudioImportJob: Codable, Equatable {
     var movedTo: String?
     /// Die Datei gehört Flow (Datei-Versprechen, z. B. aus Sprachmemos) → wandert nach der Auswertung in den Notiz-Ordner
     var ownedCopy: Bool?
+    /// Letzte Auswertung fand keine Sprache (Stille-Prüfung oder kein einziges Wort) – „Nochmal versuchen“ möglich
+    var noSpeech: Bool?
+    /// „Nochmal versuchen“ nach „keine Sprache“: Stille-Prüfung überspringen, die ganze Datei durch die Erkennung
+    var forceSpeech: Bool?
 
     /// Art der Aufnahme für die Fertig-Karte („Sprachmemo · …“)
     var kindLabel: String {

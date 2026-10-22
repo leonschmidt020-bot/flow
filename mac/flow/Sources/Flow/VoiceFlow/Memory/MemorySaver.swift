@@ -52,8 +52,10 @@ final class MemorySaver {
         switch modus {
         // Sprechertrennung wird in jedem Modus nach der Meeting-Auswertung freigegeben (kein Nachteil messbar).
         case .aus: return SpeicherProfil(whisperIdle: nil, diarizerIdle: 120)
+        // Auch große Macs parken nach 3 min (vorher 10): 25 Aufwecker am 18.10. alle ≤0,55 s, keiner gescheitert –
+        // der Start läuft parallel zum Sprechen, die 0,6 GB stehen dafür den Rest der Zeit anderen Apps zur Verfügung.
         case .auto: return smallMac ? SpeicherProfil(whisperIdle: 3 * 60, diarizerIdle: 60)
-                                    : SpeicherProfil(whisperIdle: 10 * 60, diarizerIdle: 120)
+                                    : SpeicherProfil(whisperIdle: 3 * 60, diarizerIdle: 120)
         case .stark: return SpeicherProfil(whisperIdle: 45, diarizerIdle: 30)
         }
     }

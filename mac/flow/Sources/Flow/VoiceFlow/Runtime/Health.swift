@@ -83,7 +83,11 @@ final class Health {
         signal(SIGTERM, SIG_IGN)
         let src = DispatchSource.makeSignalSource(signal: SIGTERM, queue: DispatchQueue.global(qos: .userInitiated))
         src.setEventHandler { [weak self] in
+            // Wächter: hängt das Abmelden (09.10.: eine alte App überlebte ein Update-Beenden), endet die App
+            // nach 2 s trotzdem – sonst startet die neue Version als „zweite Instanz“ und das Update wird zurückgenommen.
+            DispatchQueue(label: "flow.term-watchdog").asyncAfter(deadline: .now() + 2) { kill(getpid(), SIGKILL) }
             self?.markCleanExit()
+            ScreenRec.finishForQuit()      // ≤1,2 s – bleibt unter dem 2-s-Wächter
             signal(SIGTERM, SIG_DFL)
             kill(getpid(), SIGTERM)          // wie bisher durch das Signal enden (launchd sieht denselben Ausgang)
         }
@@ -163,12 +167,11 @@ final class Health {
         return "ohne Ausnahmetyp"
     }
 
-    /// LaunchAgent schreibt stderr nach stderr.log (build.sh) – ab 1 MB leeren
+    /// LaunchAgent schreibt stderr nach stderr.log (build.sh) – ab 1 MB kürzen.
+    /// 18.10.2026: die letzten 256 KB bleiben (vorher ganz geleert – weg waren genau die Absturz-Spuren). LogHygiene.keepTail
     static func trimStderr() {
-        let p = Paths.base.appendingPathComponent("stderr.log").path
-        if let size = (try? FileManager.default.attributesOfItem(atPath: p))?[.size] as? Int, size > 1_000_000 {
-            truncate(p, 0)
-            log("stderr.log gekürzt (\(size / 1024) KB)")
+        if let r = LogHygiene.keepTail(Paths.base.appendingPathComponent("stderr.log")) {
+            log("stderr.log gekürzt (\(r.before / 1024) → \(r.after / 1024) KB, das Ende bleibt)")
         }
     }
 }

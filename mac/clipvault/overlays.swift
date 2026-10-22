@@ -260,6 +260,51 @@ final class UCKiller {
         s.schedule(deadline: .now() + 0.1, repeating: 0.03, leeway: .milliseconds(8))
         s.setEventHandler { [weak self] in self?.tick() }
         s.resume(); src = s
+        // 18.10.2026: Der 33-Hz-Takt kostete ~0,7 % Dauer-CPU (33 Weckungen/s), obwohl Apples Fenster tagelang nicht kam.
+        // Ist der Dienst abgeschaltet (launchctl disable … und er ist nicht mehr geladen), kann er nicht starten →
+        // Takt ruht. Alle 5 min nachsehen (ein Neustart/enable schaltet den Wächter wieder ein).
+        let w = DispatchSource.makeTimerSource(queue: q)
+        w.schedule(deadline: .now() + 2, repeating: 300, leeway: .seconds(30))
+        w.setEventHandler { [weak self] in self?.updateMode() }
+        w.resume(); watch = w
+    }
+
+    private var watch: DispatchSourceTimer?
+    private var resting = false
+    static let label = "com.apple.coreservices.UASharedPasteboardProgressUI"
+
+    /// Läuft auf q: Takt schnell (Dienst kann starten) oder ruhend (abgeschaltet + nicht geladen)
+    private func updateMode() {
+        let rest = Self.serviceOff()
+        guard rest != resting else { return }
+        resting = rest
+        if rest { src?.schedule(deadline: .now() + 300, repeating: 300, leeway: .seconds(30)) }
+        else { src?.schedule(deadline: .now() + 0.03, repeating: 0.03, leeway: .milliseconds(8)) }
+        cvLog(rest ? "iPhone-Ladefenster: Apple-Dienst abgeschaltet – Wächter ruht" : "iPhone-Ladefenster: Wächter aktiv (33 Hz)")
+    }
+
+    /// true = Apples Ladefenster-Dienst ist abgeschaltet UND nicht geladen (startet also nicht mehr)
+    static func serviceOff() -> Bool {
+        let uid = getuid()
+        guard let disabled = run(["print-disabled", "gui/\(uid)"]) else { return false }
+        let off = disabled.split(separator: "\n").contains { l in
+            l.contains("\"\(label)\"") && (l.contains("=> disabled") || l.contains("=> true"))
+        }
+        guard off else { return false }
+        return run(["print", "gui/\(uid)/\(label)"]) == nil      // nicht geladen
+    }
+
+    /// launchctl ausführen; nil bei Fehler/Exit ≠ 0
+    private static func run(_ args: [String]) -> String? {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        p.arguments = args
+        let pipe = Pipe()
+        p.standardOutput = pipe; p.standardError = FileHandle.nullDevice
+        do { try p.run() } catch { return nil }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        return p.terminationStatus == 0 ? String(decoding: data, as: UTF8.self) : nil
     }
 
     /// PIDs in den festen Puffer lesen (kein neues Array pro Takt)

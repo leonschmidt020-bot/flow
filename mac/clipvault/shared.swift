@@ -555,7 +555,7 @@ final class SharedVault {
         case .file:
             // echte Datei-URL: Einfuegen in Finder, Mail, WhatsApp … legt die Datei ab / haengt sie an
             guard let u = localURL(s) else { return false }
-            pb.writeObjects([u as NSURL])
+            MultiCopy.writeFiles([u], to: pb)
         }
         if general {
             AppState.shared.lastChange = pb.changeCount   // nicht als neuer Verlaufs-Eintrag erfassen

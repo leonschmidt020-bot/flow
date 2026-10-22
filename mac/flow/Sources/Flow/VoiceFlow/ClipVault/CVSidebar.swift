@@ -175,13 +175,20 @@ struct CVCollectionIcon: View {
         }
     }
 
-    private static var cache: [String: NSImage] = [:]
+    /// 18.10.2026: vorher ein Wörterbuch ohne Grenze → NSCache mit Anzahl- und Kostengrenze
+    private static let cache: NSCache<NSString, NSImage> = {
+        let c = NSCache<NSString, NSImage>()
+        c.countLimit = 64
+        c.totalCostLimit = 4 << 20
+        return c
+    }()
     static func image(_ symbol: String) -> NSImage? {
-        if let c = cache[symbol] { return c }
+        if let c = cache.object(forKey: symbol as NSString) { return c }
         let name = String(symbol.dropFirst(4))
         guard !name.contains("/"),
-              let img = CVThumbs.make(ClipVaultClient.base.appendingPathComponent(name), maxPixel: 96) else { return nil }
-        cache[symbol] = img
+              let cg = CVThumbs.makeCG(ClipVaultClient.base.appendingPathComponent(name), maxPixel: 96) else { return nil }
+        let img = NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
+        cache.setObject(img, forKey: symbol as NSString, cost: VFImageCache.cost(cg))
         return img
     }
 }

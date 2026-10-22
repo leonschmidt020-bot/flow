@@ -94,15 +94,20 @@ enum MeetingContextPackage {
 
     /// Originalaufnahme im Meeting-Ordner (importierte Datei oder behaltener Ton)
     /// Alle Originalaufnahmen im Meeting-Ordner (Import: eine Datei; Aufnahme: ich.wav = dein Mikro, andere.wav = Ton der anderen)
+    /// 18.10.2026: nach dem Komprimieren heißen die Spuren ich.m4a/andere.m4a; liegen kurz beide da (Umwandlung läuft),
+    /// zählt die WAV (MeetingAudio.trackURL)
     private static func audioFiles(_ m: Meeting) -> [URL] {
         let exts: Set<String> = ["qta", "m4a", "mp3", "wav", "aac", "caf", "aiff", "flac", "ogg", "opus", "mp4", "mov"]
         let files = (try? FileManager.default.contentsOfDirectory(at: m.folder, includingPropertiesForKeys: nil)) ?? []
-        return files.filter { exts.contains($0.pathExtension.lowercased()) }.sorted { $0.lastPathComponent > $1.lastPathComponent }
+        let names = Set(files.map(\.lastPathComponent))
+        return files.filter { exts.contains($0.pathExtension.lowercased()) }
+            .filter { !($0.pathExtension.lowercased() == "m4a" && names.contains($0.deletingPathExtension().lastPathComponent + ".wav")) }
+            .sorted { $0.lastPathComponent > $1.lastPathComponent }
     }
     static func audioLabel(_ u: URL) -> String {
         switch u.lastPathComponent {
-        case "ich.wav": return "dein Mikrofon"
-        case "andere.wav": return "Ton der anderen (Systemton)"
+        case "ich.wav", "ich.m4a": return "dein Mikrofon"
+        case "andere.wav", "andere.m4a": return "Ton der anderen (Systemton)"
         default: return "Originalaufnahme"
         }
     }

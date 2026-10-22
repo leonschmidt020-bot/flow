@@ -105,6 +105,14 @@ def dictation_sim(binary, home):
     return res, dt, killed
 
 
+INSTALLED = os.path.expanduser("~/Applications/Flow.app/Contents/MacOS/Flow")
+
+
+def low_power():
+    out = subprocess.run(["pmset", "-g"], capture_output=True, text=True, errors="replace").stdout
+    return bool(re.search(r"^\s*(powermode|lowpowermode)\s+1\s*$", out, re.M))
+
+
 def median(xs):
     xs = sorted(xs)
     n = len(xs)
@@ -215,6 +223,19 @@ def main():
                 if f in sim_best: sim_best[f]["neu_s"] = min(sim_best[f]["neu_s"], v["neu_s"])
             timings["dictation-sim (2.)"] = round(dt, 1)
         okb, over = p50 <= bp * LAT_FACTOR, sim_over(sim_best)
+    # Stromsparmodus (pmset powermode 1) drosselt die GPU – dann ist die Baseline nicht vergleichbar. Statt durchzufallen:
+    # die INSTALLIERTE Version unter denselben Bedingungen messen und dagegen vergleichen (gleiche Grenzen).
+    if (not okb or over) and low_power() and os.path.exists(INSTALLED):
+        print("  … Stromsparmodus an – messe die installierte Version unter gleichen Bedingungen", flush=True)
+        try:
+            rb, _, _, dt, k = bench(INSTALLED, home, mf, a.work, "ref"); killed += k; timings["engine-bench (installiert)"] = round(dt, 1)
+            rds, dt, k = dictation_sim(INSTALLED, home); killed += k; timings["dictation-sim (installiert)"] = round(dt, 1)
+            bp, bsim = rb["hybrid"]["p50"], rds
+            okb, over = p50 <= bp * LAT_FACTOR, sim_over(sim_best)
+            rep.add("Stromsparmodus: Latenz gegen die installierte Version gemessen (gleiche Bedingungen)", None,
+                    f"installiert p50 {bp} ms")
+        except RuntimeError as e:
+            rep.add("Stromsparmodus: Vergleichsmessung der installierten Version", False, str(e)[:300])
     rep.add(f"Latenz hybrid p50 {p50} ms (Baseline {bp} ms, Grenze {int(bp * LAT_FACTOR)} ms)", okb,
             f"{(p50 / bp - 1) * 100:+.0f} %" + (" (2. Messung)" if retried else ""))
     rep.add(f"Diktat „gesamt“ nach dem Loslassen je Aufnahme ≤ Baseline × {LAT_FACTOR} + {int(SIM_SLACK_S * 1000)} ms", not over,

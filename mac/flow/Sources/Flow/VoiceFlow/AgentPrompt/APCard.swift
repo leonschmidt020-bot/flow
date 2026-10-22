@@ -50,6 +50,30 @@ protocol APPresenter: AnyObject {
 
 enum APCardFlash { case copied, copiedOriginal, inserted }
 
+/// 15.10.2026 (Wunsch: „ich sehe nicht, wie der Auftrag generiert wird“): dieselbe „wird gebaut“-Karte für andere KI-Arbeiten
+/// (z. B. Bildschirmaufnahme „Als Auftrag“) – eigene Texte, Restzeit-Schätzung, Fortschrittsbalken.
+struct APCardJob: Equatable {
+    var chip: String
+    var title: String
+    var line: String
+    /// geschätzte Gesamtdauer in Sekunden (aus früheren Läufen)
+    var expected: Double
+    var note: String
+
+    /// „noch ~12 s“ / „gleich fertig …“
+    static func remaining(elapsed: Double, expected: Double) -> String {
+        let left = expected - elapsed
+        if left <= 1.5 { return "gleich fertig …" }
+        return "noch ~\(Int(left.rounded())) s"
+    }
+    /// 0…0,95 – erreicht nie ganz 1, solange die KI noch arbeitet
+    static func fraction(elapsed: Double, expected: Double) -> Double {
+        guard expected > 0 else { return 0 }
+        let x = elapsed / expected
+        return x < 0.85 ? x : min(0.95, 0.85 + (1 - exp(-(x - 0.85) * 3)) * 0.1)
+    }
+}
+
 // MARK: - Maße + Lage
 
 enum APCardMetrics {
@@ -160,6 +184,8 @@ final class APCardModel: ObservableObject {
     @Published var opacity: Double = 1
     /// Illustration je Zustand (Variante einmal gewählt, dann fest)
     @Published var illustrations: [String: String] = [:]
+    /// gesetzt = Karte zeigt eine andere KI-Arbeit statt eines Agent-Prompts
+    @Published var job: APCardJob?
     var act: (APCardAction) -> Void = { _ in }
 
     init(phase: APCardPhase, geo: APGeo) { self.phase = phase; self.geo = geo }
@@ -223,6 +249,9 @@ final class APCard: APPresenter {
 
     var pillAnchor: () -> NSRect? = { VFNotify.shared.pillAnchor?() }
     var onAction: (APCardAction) -> Void = { _ in }
+    private var job: APCardJob?
+    private var jobAction: ((APCardAction) -> Void)?
+    var showingJob: Bool { jobAction != nil && isShowing }
 
     private var panel: VFNotifyPanel?
     private var model: APCardModel?
@@ -277,6 +306,31 @@ final class APCard: APPresenter {
 
     func show(_ phase: APCardPhase) {
         guard Thread.isMainThread else { DispatchQueue.main.async { self.show(phase) }; return }
+        // Agent-Prompt übernimmt die Karte: eine laufende fremde Arbeit gibt sie ab
+        if job != nil { job = nil; jobAction = nil; model?.job = nil }
+        present(phase)
+    }
+
+    /// Fremde KI-Arbeit zeigen (nur wenn gerade keine Agent-Prompt-Karte offen ist) – false = Karte war belegt
+    @discardableResult
+    func showJob(_ j: APCardJob, started: Date = Date(), onAction: @escaping (APCardAction) -> Void) -> Bool {
+        guard Thread.isMainThread else { DispatchQueue.main.async { self.showJob(j, started: started, onAction: onAction) }; return true }
+        if isShowing && jobAction == nil { return false }
+        job = j; jobAction = onAction
+        model?.job = j
+        present(.building(partial: "", words: 0, started: started))
+        return true
+    }
+
+    /// Fremde Arbeit fertig/abgebrochen: Karte schließen – aber nur, wenn sie noch dieser Arbeit gehört
+    func endJob() {
+        guard Thread.isMainThread else { DispatchQueue.main.async { self.endJob() }; return }
+        guard jobAction != nil else { return }
+        jobAction = nil
+        close()
+    }
+
+    private func present(_ phase: APCardPhase) {
         if let m = model, !closing {
             let sameKind = m.phase.key == phase.key
             if sameKind { m.phase = phase }   // Live-Text: ohne Animation
@@ -294,12 +348,13 @@ final class APCard: APPresenter {
         let scr = VFNotify.screen(containing: NSPoint(x: pill.midX, y: pill.midY)) ?? NSScreen.main
         let geo = APGeo.make(pill: pill, visible: scr?.visibleFrame ?? pill.insetBy(dx: -800, dy: -600), frame: scr?.frame ?? pill.insetBy(dx: -800, dy: -600))
         let m = APCardModel(phase: phase, geo: geo)
+        m.job = job
         m.ensureIllustration(phase)
         if case .done = phase { m.copied = true }
         m.act = { [weak self] a in self?.handle(a) }
         model = m
         closing = false
-        let p = panel ?? VFNotifyPanel()
+        let p = SpaceGuard.fresh(panel, "Agent-Prompt") ?? VFNotifyPanel()
         panel = p
         let host = VFNotifyHostingView(rootView: APCardStage(model: m))
         host.frame = NSRect(origin: .zero, size: geo.windowFrame.size)
@@ -307,6 +362,11 @@ final class APCard: APPresenter {
         p.setFrame(geo.windowFrame, display: false)
         p.ignoresMouseEvents = true
         p.orderFrontRegardless()
+        // Fensterserver zeigt es wirklich? Sonst frisches Fenster (siehe SpaceGuard.ensureShown, 10.10.2026)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            guard let self, let q = self.panel, q === p else { return }
+            self.panel = SpaceGuard.ensureShown(q, "Agent-Prompt") { VFNotifyPanel() }
+        }
         let spring = phase.key == "offer" ? APCard.offerSpring : APCard.cardSpring
         DispatchQueue.main.async {
             withAnimation(.spring(response: spring.response, dampingFraction: spring.damping)) { m.progress = 1 }
@@ -370,6 +430,10 @@ final class APCard: APPresenter {
     }
 
     private func handle(_ a: APCardAction) {
+        if let ja = jobAction {
+            if a == .cancel || a == .close { jobAction = nil; close() }
+            ja(a); return
+        }
         if a == .close { onAction(.close); return }
         onAction(a)
     }
@@ -389,6 +453,7 @@ final class APCard: APPresenter {
     }
 
     private func finishClose() {
+        job = nil
         model?.opacity = 1
         panel?.orderOut(nil)
         panel?.contentView = nil
@@ -443,12 +508,13 @@ final class APCard: APPresenter {
     static func renderPNG(_ phase: APCardPhase, to url: URL, progress: CGFloat = 1, hovering: Bool = false, showOriginal: Bool = false,
                           copied: Bool = true, opacity: Double = 1, pill: NSRect = NSRect(x: 560, y: 30, width: 66, height: 24),
                           screen: NSRect = NSRect(x: 0, y: 0, width: 1512, height: 949),
-                          background: NSColor = NSColor(white: 0.88, alpha: 1), illustration: String? = nil) -> Bool {
+                          background: NSColor = NSColor(white: 0.88, alpha: 1), illustration: String? = nil, job: APCardJob? = nil) -> Bool {
         _ = NSApplication.shared
         let geo = APGeo.make(pill: pill, visible: screen, frame: screen)
         let m = APCardModel(phase: phase, geo: geo)
         m.progress = progress; m.hovering = hovering; m.showOriginal = showOriginal; m.copied = copied; m.opacity = opacity
         if let illustration { m.illustrations[phase.key] = illustration }
+        m.job = job
         let root = ZStack(alignment: .topLeading) {
             Color(nsColor: background)
             Capsule().fill(Color.black.opacity(0.92))
@@ -584,9 +650,10 @@ struct APCardContent: View {
                 switch p {
                 case .offer: chip("Vorschlag", "wand.and.stars", APCardStyle.lilac)
                 case .building(_, _, let started):
-                    chip("Agent-Prompt", "sparkles", APCardStyle.lilac)
+                    chip(model.job?.chip ?? "Agent-Prompt", "sparkles", APCardStyle.lilac)
                     TimelineView(.periodic(from: started, by: 1)) { ctx in
-                        Text("\(max(0, Int(ctx.date.timeIntervalSince(started)))) s")
+                        let e = max(0, ctx.date.timeIntervalSince(started))
+                        Text(model.job.map { "\(Int(e)) s · \(APCardJob.remaining(elapsed: e, expected: $0.expected))" } ?? "\(Int(e)) s")
                             .font(.system(size: 11, weight: .medium).monospacedDigit()).foregroundStyle(.white.opacity(0.42))
                     }
                     .padding(.leading, 2)
@@ -641,7 +708,7 @@ struct APCardContent: View {
     private func title(_ p: APCardPhase) -> String {
         switch p {
         case .offer: return "Daraus einen Agent-Prompt machen?"
-        case .building: return "Prompt wird gebaut …"
+        case .building: return model.job?.title ?? "Prompt wird gebaut …"
         case .done: return "Dein Agent-Prompt ist fertig"
         case .stopped(let k, _, _): return k == .cancelled ? "Prompt abgebrochen" : "Prompt hat nicht geklappt"
         }
@@ -651,6 +718,7 @@ struct APCardContent: View {
         switch p {
         case .offer(let d): return d.cardLine
         case .building(let partial, let words, _):
+            if let j = model.job { return j.line }
             if !APCardStyle.claudeAvailable() { return "Flow ordnet deine \(words) Wörter nach Regeln …" }
             return partial.isEmpty ? "Claude ordnet deine \(words) Wörter …" : "Claude schreibt – \(APText.words(partial)) von ~\(max(words, APText.words(partial))) Wörtern"
         case .done(let r, _):
@@ -681,7 +749,11 @@ struct APCardContent: View {
                 if partial.isEmpty { APFoldingLines().padding(.horizontal, 14).padding(.vertical, 14) }
                 else { APLiveText(text: partial) }
             } overlay: {
-                VStack { Spacer(); APSweepBar().frame(height: 2).padding(.horizontal, 1) }
+                if let j = model.job, case .building(_, _, let started) = p {
+                    VStack { Spacer(); APJobBar(started: started, expected: j.expected).frame(height: 3).padding(.horizontal, 1) }
+                } else {
+                    VStack { Spacer(); APSweepBar().frame(height: 2).padding(.horizontal, 1) }
+                }
             } corner: { EmptyView() }
         case .done(let r, _):
             preview {
@@ -737,7 +809,7 @@ struct APCardContent: View {
             case .building:
                 APButton(title: "Abbrechen", kind: .secondary) { model.act(.cancel) }
                 Spacer(minLength: 0)
-                Text("Original liegt schon in der Zwischenablage")
+                Text(model.job?.note ?? "Original liegt schon in der Zwischenablage")
                     .font(.system(size: 11)).foregroundStyle(.white.opacity(0.4)).lineLimit(1)
             case .done(let r, let sent):
                 if model.showOriginal {
@@ -1001,6 +1073,28 @@ struct APFoldingLines: View {
 }
 
 /// Dünner Leuchtstreifen, der unten durch die Vorschau wandert (unbestimmter Fortschritt)
+/// Fortschritt nach geschätzter Dauer (füllt sich, bleibt kurz vor dem Ende stehen) + leichter Glanz
+struct APJobBar: View {
+    let started: Date
+    let expected: Double
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30)) { ctx in
+            GeometryReader { geo in
+                let e = ctx.date.timeIntervalSince(started)
+                let f = APCardJob.fraction(elapsed: e, expected: expected)
+                let w = geo.size.width * f
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.white.opacity(0.08))
+                    Capsule().fill(LinearGradient(colors: [APCardStyle.lilac.opacity(0.55), APCardStyle.lilac], startPoint: .leading, endPoint: .trailing))
+                        .frame(width: max(3, w))
+                    let g = (e.truncatingRemainder(dividingBy: 1.6)) / 1.6
+                    Capsule().fill(Color.white.opacity(0.55)).frame(width: 26).offset(x: max(0, w - 26) * g).opacity(w > 30 ? 0.6 : 0)
+                }
+            }
+        }
+    }
+}
+
 struct APSweepBar: View {
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 30)) { ctx in

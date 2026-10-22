@@ -72,16 +72,37 @@ final class WhisperEngine {
             let t0 = Date()
             while Date().timeIntervalSince(t0) < 30 {
                 if ping() {
-                    serverUp = true; restarts = 0
+                    serverUp = true; restarts = 0; startFailures = 0
                     log(String(format: parked ? "Whisper-Server wieder da nach %.2fs (war geparkt)" : "Whisper-Server bereit nach %.1fs", Date().timeIntervalSince(t0)))
                     parked = false
                     return
                 }
+                // Prozess schon tot (z. B. Modell kaputt)? Nicht 30 s lang einen toten Server anpingen.
+                guard p.isRunning else { break }
                 // Feines Raster: beim Aufwecken aus dem Parken zählt jede Zehntelsekunde
                 Thread.sleep(forTimeInterval: parked ? 0.03 : 0.25)
             }
-            log("Whisper-Server antwortet nicht")
-            parked = false
+            // Früher blieb hier ein Prozess ohne Antwort stehen (0,7 GB, serverUp=false, parked=false) und Whisper war
+            // bis zum App-Neustart aus. Jetzt: beenden und geparkt lassen → der nächste Fn-Druck versucht es neu;
+            // nach 3 Fehlschlägen in Folge bleibt es bei Parakeet.
+            startFailures += 1
+            log("Whisper-Server antwortet nicht (\(p.isRunning ? "hängt" : "beendet"), Fehlschlag \(startFailures))")
+            process = nil
+            serverUp = false
+            if p.isRunning { p.terminate() }
+            parked = startFailures < 3
+        }
+    }
+
+    private var startFailures = 0
+
+    /// Anfrage lief in die Zeitüberschreitung → Server hängt: beenden, der terminationHandler startet ihn neu.
+    private func restartIfHung() {
+        queue.async { [self] in
+            guard let p = process, serverUp, !stopping, !parked else { return }
+            log("Whisper-Server hängt (Zeitüberschreitung) – starte neu")
+            serverUp = false
+            p.terminate()
         }
     }
 
@@ -204,7 +225,9 @@ final class WhisperEngine {
         req.httpMethod = "POST"
         req.timeoutInterval = max(10, Double(samples.count) / 16000 * 0.6)
         req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        let (data, _) = try await URLSession.shared.upload(for: req, from: body)
+        let data: Data
+        do { (data, _) = try await URLSession.shared.upload(for: req, from: body) }
+        catch let e as URLError where e.code == .timedOut { restartIfHung(); throw e }
         guard let j = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw NSError(domain: "Flow", code: 8, userInfo: [NSLocalizedDescriptionKey: "Whisper-Antwort unlesbar"])
         }

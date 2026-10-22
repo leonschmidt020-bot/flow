@@ -182,18 +182,10 @@ final class MeetingStore: ObservableObject {
     }
 
     /// Das Protokoll enthält diktierte Texte → gleiche Frist wie die Transkripte.
+    /// 18.10.2026: nur noch umschreiben, wenn die erste Zeile abgelaufen ist (dann mit 6 h Vorlauf) oder die Datei über 5 MB
+    /// liegt – vorher stündlich die ganze Datei (~7 MB/Tag). Die 5-MB-Grenze gilt auch bei „Nie“. Siehe LogHygiene.
     static func pruneLog() {
-        let days = Settings.shared.retentionDays
-        guard days > 0 else { return }
-        let cutoff = Date().addingTimeInterval(-Double(days) * 86400)
-        rewriteLog { txt in
-            let f = ISO8601DateFormatter()
-            let kept = txt.components(separatedBy: "\n").filter { line in
-                guard let sp = line.firstIndex(of: " "), let d = f.date(from: String(line[..<sp])) else { return false }
-                return d >= cutoff
-            }
-            return kept.isEmpty ? "" : kept.joined(separator: "\n") + "\n"
-        }
+        LogHygiene.prune(Paths.log, retentionDays: Settings.shared.retentionDays, rewrite: rewriteLog)
     }
 
     func setKeep(_ id: String, _ keep: Bool) {
@@ -294,17 +286,69 @@ final class WavWriter {
 
     func close() { queue.sync { file = nil } }
 
+    /// 16 kHz mono Samples einer WAV – oder der komprimierten Meeting-Spur (.m4a, siehe MeetingAudio).
+    /// 18.10.2026: in Blöcken direkt in EIN Array – vorher erst ein Puffer über die ganze Länge, dann eine Kopie davon
+    /// (1-h-Spur: 2 × 230 MB Spitze). Gleiches Ergebnis (geprüft in --selftest-meeting-audio).
     static func read(_ url: URL) -> [Float] {
+        if url.pathExtension.lowercased() == "wav" { WavRepair.repairIfTruncated(url) }
         guard let f = try? AVAudioFile(forReading: url, commonFormat: .pcmFormatFloat32, interleaved: false),
-              f.length > 0,
-              let buf = AVAudioPCMBuffer(pcmFormat: f.processingFormat, frameCapacity: AVAudioFrameCount(f.length)) else { return [] }
-        do { try f.read(into: buf) } catch { return [] }
-        guard let ch = buf.floatChannelData else { return [] }
-        if f.processingFormat.sampleRate == 16000 {
-            return Array(UnsafeBufferPointer(start: ch[0], count: Int(buf.frameLength)))
+              f.length > 0, f.processingFormat.sampleRate == 16000 else { return [] }
+        let chunk: AVAudioFrameCount = 1 << 16
+        guard let buf = AVAudioPCMBuffer(pcmFormat: f.processingFormat, frameCapacity: chunk) else { return [] }
+        var out: [Float] = []
+        out.reserveCapacity(Int(f.length))
+        // Nie über das Ende hinaus lesen: AVAudioFile wirft dort einen Fehler (gemessen 18.10.2026)
+        while f.framePosition < f.length {
+            let want = AVAudioFrameCount(min(Int64(chunk), f.length - f.framePosition))
+            do { try f.read(into: buf, frameCount: want) } catch { return [] }
+            guard buf.frameLength > 0, let ch = buf.floatChannelData else { break }
+            out.append(contentsOf: UnsafeBufferPointer(start: ch[0], count: Int(buf.frameLength)))
         }
-        return []
+        return out
     }
+}
+
+/// Absturz MITTEN in der Aufnahme (18.10.2026, Fund beim Komprimieren): AVAudioFile schreibt die Größen erst beim
+/// Schließen in den WAV-Kopf → die Datei las sich danach als 0 Frames, „Unterbrochen – fortsetzen“ fand keinen Ton.
+/// Hier: Kopf-Größen (RIFF + data) aus der echten Dateigröße eintragen, angefangenes Sample abschneiden.
+enum WavRepair {
+    /// true = repariert. Fasst nur Dateien an, deren data-Größe nicht zur Datei passt und die seit ≥5 s ruhen.
+    @discardableResult
+    static func repairIfTruncated(_ url: URL, now: Date = Date()) -> Bool {
+        let fm = FileManager.default
+        guard let attrs = try? fm.attributesOfItem(atPath: url.path),
+              let size = (attrs[.size] as? NSNumber)?.int64Value, size > 44,
+              let mod = attrs[.modificationDate] as? Date, now.timeIntervalSince(mod) >= 5,
+              let h = try? FileHandle(forUpdating: url) else { return false }
+        defer { try? h.close() }
+        guard let head = try? h.read(upToCount: 8192), head.count >= 12,
+              String(decoding: head[0..<4], as: UTF8.self) == "RIFF",
+              String(decoding: head[8..<12], as: UTF8.self) == "WAVE" else { return false }
+        func u32(_ o: Int) -> UInt32 { head[o..<o + 4].enumerated().reduce(0) { $0 | UInt32($1.element) << (8 * $1.offset) } }
+        func u16(_ o: Int) -> UInt16 { UInt16(head[o]) | UInt16(head[o + 1]) << 8 }
+        var o = 12, align = 2
+        while o + 8 <= head.count {
+            let id = String(decoding: head[o..<o + 4], as: UTF8.self), len = Int(u32(o + 4))
+            if id == "fmt ", o + 22 <= head.count { align = max(1, Int(u16(o + 20))) }
+            if id == "data" {
+                let start = Int64(o + 8)
+                let avail = (size - start) / Int64(align) * Int64(align)
+                // Nur reparieren, wenn der Kopf 0 oder MEHR behauptet, als da ist (nachgestellte Blöcke nie abschneiden)
+                guard avail > 0, len == 0 || Int64(len) > size - start, avail <= Int64(UInt32.max) else { return false }
+                do {
+                    try h.truncate(atOffset: UInt64(start + avail))
+                    try h.seek(toOffset: 4); try h.write(contentsOf: le(UInt32(start + avail - 8)))
+                    try h.seek(toOffset: UInt64(o + 4)); try h.write(contentsOf: le(UInt32(avail)))
+                    log("Meeting-Spur repariert (Absturz während der Aufnahme): \(url.lastPathComponent), \(avail / Int64(align)) Frames")
+                    return true
+                } catch { return false }
+            }
+            o += 8 + len + (len & 1)
+        }
+        return false
+    }
+
+    private static func le(_ v: UInt32) -> Data { withUnsafeBytes(of: v.littleEndian) { Data($0) } }
 }
 
 /// Energie-basierte Sprach-Abschnitte für die Live-Mitschrift.

@@ -58,12 +58,12 @@ func log(_ s: String) {
     }
 }
 
-/// Log-Datei umschreiben (Aufräumen) – auf derselben Queue wie das Schreiben
+/// Log-Datei umschreiben (Aufräumen) – auf derselben Queue wie das Schreiben.
+/// 18.10.2026: über LogHygiene.rewriteFile – kaputtes UTF-8 am Ende blockiert das Aufräumen nicht mehr, unverändert = nicht schreiben
 func rewriteLog(_ transform: @escaping (String) -> String) {
     logQueue.async {
         try? logHandle?.close(); logHandle = nil
-        guard let txt = try? String(contentsOf: Paths.log, encoding: .utf8) else { return }
-        try? transform(txt).write(to: Paths.log, atomically: true, encoding: .utf8)
+        LogHygiene.rewriteFile(Paths.log, transform)
     }
 }
 

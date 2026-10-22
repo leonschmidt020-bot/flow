@@ -64,13 +64,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     static var shared: AppDelegate { NSApp.delegate as! AppDelegate }
 
-    func applicationWillTerminate(_ n: Notification) { Health.shared.markCleanExit(); WhisperEngine.shared.stop() }
+    func applicationWillTerminate(_ n: Notification) {
+        Health.shared.markCleanExit()
+        ScreenRec.finishForQuit()          // laufende Bildschirmaufnahme abschließen statt verlieren
+        WhisperEngine.shared.stop()
+    }
 
     func applicationDidFinishLaunching(_ n: Notification) {
         log("Flow startet (\(Bundle.main.bundlePath), \(AppVersion.line))")
         // Zuerst: voriger Lauf sauber beendet? neue Absturzberichte? Dann Lebenszeichen alle 30 s (Health-Gate beim Update)
         Health.shared.begin()
         Health.shared.startTimers()
+        // Diktat-Sicherung: Diktat, das beim letzten Lauf nicht fertig wurde (Absturz/Neustart)? → anbieten
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [weak self] in self?.offerCrashedDictations() }
         VF.registerFonts()
         _ = VFStats.shared          // Statistik früh anlegen (einmalig aus dem Verlauf befüllt)
         AppDelegate.registerHubPages()
@@ -201,6 +207,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         // Meldungskarten wachsen aus der Pille
         VFNotify.shared.pillAnchor = { [weak self] in self?.pill.view.capsuleRectInScreen }
+        VFNotify.shared.pillHovered = { [weak self] in self?.pill.view.isHovered ?? false }
         CommandMode.shared.presetResolver = { TransformStore.shared.match($0)?.instruction }
         meeting.notifyDetected = { app, accept, dismiss in
             // Chips „Mit Bildschirm“ / „Nur Ton“ → gilt für dieses Meeting
@@ -222,14 +229,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         PartnerVocab.shared.start()          // gemeinsame Namen mit dem Partner (ClipVault vocab)
         UpdateBadge.shared.start()
         Updater.shared.start()
-        // Beim letzten Beenden unterbrochene Auswertungen fortsetzen
+        // Beim letzten Beenden unterbrochene Auswertungen fortsetzen (Spur als WAV oder schon komprimiert als .m4a)
         for m in MeetingStore.shared.meetings where m.status == .failed && (m.progressNote ?? "").hasPrefix("Unterbrochen")
-            && FileManager.default.fileExists(atPath: m.micURL.path) {
+            && MeetingAudio.hasTrack(m.micURL) {
             log("Setze unterbrochene Auswertung fort: \(m.id)")
             meeting.reprocess(meetingID: m.id)
         }
         // Audiodateien: Unterbrochenes fortsetzen, Eingangsordner, Ablage auf der Pille
         AudioImport.shared.start(pill: pill)
+        // 18.10.2026: vorhandenen Meeting-Ton nach 60 s im Hintergrund zu AAC komprimieren (eins nach dem anderen)
+        MeetingAudioCompressor.shared.scheduleMigration(after: 60)
         // Alte Transkripte aufräumen: beim Start und dann stündlich
         MeetingStore.shared.cleanup()
         retentionTimer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { _ in MeetingStore.shared.cleanup() }
@@ -251,8 +260,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         v.languageShort = Settings.shared.languageMode.short
         v.allVoices = !Settings.shared.onlyMyVoice
         v.onLanguageClick = { [weak self] in self?.showLanguageMenu() }
+        v.clipVaultCheck = { ClipVaultClient.shared.canSendCommands }
+        v.onClipVaultClick = { [weak self] in self?.openClipVault() }
         v.onQuestionDismiss = { [weak self] in let h = self?.questionHandler; self?.questionHandler = nil; h?(false) }
         v.menuProvider = { [weak self] in self?.buildMenu(forPill: true) ?? NSMenu() }
+    }
+
+    // MARK: ClipVault-Knopf unter der Pille
+
+    /// Öffnet den ClipVault-Verlauf auf dem Bildschirm der Pille; ist er schon offen, geht er zu (19.10.2026).
+    private func openClipVault() {
+        let cv = ClipVaultClient.shared
+        guard cv.status().running else { pill.view.showToast("ClipVault läuft gerade nicht", seconds: 2.2); return }
+        let r = pill.view.capsuleRectInScreen
+        if !cv.send("show", extra: ["x": Double(r.midX), "y": Double(r.midY), "toggle": 1]) {
+            pill.view.showToast("ClipVault ist noch nicht eingerichtet", seconds: 2.2)
+        }
+        log("Pille: ClipVault-Knopf")
     }
 
     // MARK: Sprache (Weltkugel an der Pille)
@@ -462,6 +486,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let rec = item(ScreenRec.shared.isRecording ? "Bildschirmaufnahme beenden" : "Bildschirm aufnehmen …", #selector(toggleScreenRec))
         rec.keyEquivalent = "r"; rec.keyEquivalentModifierMask = [.control, .option]
         m.addItem(rec)
+        m.addItem(backupMenuItem())
         m.addItem(.separator())
 
         let posMenu = NSMenu()
@@ -497,6 +522,68 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func startHandsFree() { dictation.start(handsFree: true) }
+
+    // MARK: Diktat-Sicherungen (16.10.2026)
+
+    private func backupMenuItem() -> NSMenuItem {
+        let root = NSMenuItem(title: "Diktat-Sicherungen", action: nil, keyEquivalent: "")
+        let sub = NSMenu()
+        let list = DictationBackup.shared.entries(limit: 10)
+        let head = NSMenuItem(title: list.isEmpty ? "Noch keine Sicherung" : "Klick: Text kopieren · ⌥-Klick: neu erkennen", action: nil, keyEquivalent: "")
+        head.isEnabled = false
+        sub.addItem(head)
+        for e in list {
+            let i = item(e.menuTitle, #selector(useBackup(_:)))
+            i.representedObject = e.id
+            i.toolTip = e.text.map { String($0.prefix(300)) }
+            sub.addItem(i)
+            let alt = item(e.menuTitle + " – neu erkennen", #selector(rerunBackup(_:)))
+            alt.representedObject = e.id
+            alt.isAlternate = true; alt.keyEquivalentModifierMask = [.option]
+            sub.addItem(alt)
+        }
+        sub.addItem(.separator())
+        sub.addItem(item("Ordner öffnen", #selector(openBackupFolder)))
+        root.submenu = sub
+        return root
+    }
+
+    @objc private func useBackup(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String, let e = DictationBackup.shared.entry(id) else { return }
+        if e.hasText, let t = e.text {
+            let pb = NSPasteboard.general
+            pb.clearContents(); pb.setString(t, forType: .string)
+            pill.view.showToast("Text aus der Sicherung kopiert (⌘V)", seconds: 2.4)
+        } else {
+            pill.view.showToast("Sicherung wird erkannt …", seconds: 2)
+            dictation.rescueRecognize(id)
+        }
+    }
+
+    @objc private func rerunBackup(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String else { return }
+        pill.view.showToast("Sicherung wird neu erkannt …", seconds: 2)
+        dictation.rescueRecognize(id)
+    }
+
+    @objc private func openBackupFolder() {
+        let d = DictationBackup.shared.dir
+        try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        NSWorkspace.shared.open(d)
+    }
+
+    private func offerCrashedDictations() {
+        let crashed = DictationBackup.shared.recoverCrashed().filter { $0.duration >= 2 }
+        guard let e = crashed.max(by: { $0.date < $1.date }) else { return }
+        log("Diktat-Sicherung: \(crashed.count) nicht fertiges Diktat gefunden (\(e.menuTitle))")
+        var n = VFNotice(id: "diktat.sicherung", title: "Dein Diktat ist gesichert",
+                         text: "Flow wurde während eines Diktats beendet (\(e.menuTitle.replacingOccurrences(of: " · nicht fertig geworden", with: ""))). Das Gesagte ist nicht verloren.",
+                         illustration: "illu_aufnahme_fertig", fallbackSymbol: "lifepreserver")
+        n.primary = ("Erkennen + kopieren", { [weak self] in self?.dictation.rescueRecognize(e.id) })
+        n.secondary = ("Später", {})
+        n.timeout = 60
+        VFNotify.shared.show(n)
+    }
     @objc private func enrollVoice() { VoiceFlowWindow.shared.show(.training) }
     @objc private func toggleMeeting() { meeting.toggle() }
     @objc private func toggleScreenRec() { ScreenRec.shared.toggle() }

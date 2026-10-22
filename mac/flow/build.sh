@@ -97,6 +97,7 @@ else
   fi
   # Leerzeichen im Pfad (z. B. iCloud-„Dokumente – <Mac>“) kann swift build abbrechen lassen
   case "$(pwd)" in *" "*) echo "⚠︎ Projektpfad enthält Leerzeichen ($(pwd)) – swift build kann daran scheitern. Besser z. B. nach ~/Developer verschieben.";; esac
+  inst_heal_moved_build "$(pwd)" >/dev/null || echo "⚠︎ Alter Bauordner ließ sich nicht beiseitelegen – Build kann scheitern"
   set +e
   swift build -c release > .build-log.txt 2>&1
   rc=$?

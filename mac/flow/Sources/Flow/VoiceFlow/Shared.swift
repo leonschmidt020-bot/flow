@@ -74,6 +74,14 @@ enum VFAsset {
         return FileManager.default.fileExists(atPath: s.path) ? s : nil
     }
 
+    /// Gibt es das Bild (name ohne Endung)? Lädt nichts.
+    /// 18.10.2026: Existenz-Prüfungen per image() != nil luden jede Illustrations-Variante für immer in `cache`.
+    static func exists(_ name: String) -> Bool {
+        cache[name] != nil || url("\(name).png") != nil || url("\(name).jpg") != nil
+    }
+    /// Für --selftest-ram: liegt das Bild schon im Speicher?
+    static func isCached(_ name: String) -> Bool { cache[name] != nil }
+
     private static var cache: [String: NSImage] = [:]
     /// name ohne Endung; sucht .png, dann .jpg
     static func image(_ name: String) -> NSImage? {

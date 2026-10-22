@@ -21,7 +21,9 @@ import ScreenCaptureKit
 enum ScreenRecSound: String, CaseIterable {
     case none = "Ohne Ton", mic = "Mikrofon", system = "Systemton"
     var short: String { self == .none ? "ohne Ton" : self == .mic ? "mit Mikrofon" : "mit Systemton" }
-    /// gespeicherte Wahl (frühe Fassung „Systemton + Mikro“ → Mikrofon: da wurde erklärt)
+    /// 16.10.2026 (Bericht: bei Systemton kam kein Transkript): Transkript, sobald Ton aufgenommen wird
+    var transcribes: Bool { self != .none }
+    /// gespeicherte Wahl (alte Fassung „Systemton + Mikro“ → Mikrofon: da wurde erklärt)
     static func stored(_ raw: String?) -> ScreenRecSound {
         if raw == "Systemton + Mikro" { return .mic }
         return ScreenRecSound(rawValue: raw ?? "") ?? .system
@@ -31,10 +33,9 @@ enum ScreenRecSound: String, CaseIterable {
 /// Kopier-Art der fertigen Aufnahme: nur die Datei – oder mit Kontext für Agents (Schlüsselbilder, mit Mikrofon
 /// auch das Transkript)
 enum ScreenRecCopy: String, CaseIterable {
-    case video = "Nur Video", withContext = "mit Kontext"
-    static func label(_ c: ScreenRecCopy, sound: ScreenRecSound) -> String {
-        c == .video ? "Nur Video" : (sound == .mic ? "Video + Transkript + Bilder" : "Video + Bilder")
-    }
+    case video = "Nur Video", withContext = "Mit Kontext", task = "Als Auftrag"
+    /// Kurz, damit drei Chips in die Karte passen; was „Kontext“ ist, sagt der Kartentext
+    static func label(_ c: ScreenRecCopy, sound: ScreenRecSound) -> String { c.rawValue }
 }
 
 final class ScreenRec: NSObject, SCRecordingOutputDelegate, SCStreamDelegate {
@@ -70,10 +71,28 @@ final class ScreenRec: NSObject, SCRecordingOutputDelegate, SCStreamDelegate {
     private var done: ScreenRecDone?
     /// Klicks während der Aufnahme (Sekunden ab Start) – dort entstehen Schlüsselbilder
     private var clicks: [TimeInterval] = []
-    private var clickMonitor: Any?
+    private var clickInfos: [ScreenRecClickInfo] = []
+    private var inkView: ScreenRecInk?
     /// Mausposition während der Aufnahme (30×/s, Bildschirm-Koordinaten) → Mausspur-Bilder
     private var mouse: [ScreenRecMouse] = []
-    private var mouseTimer: Timer?
+    /// Klick-Monitor + 30-Hz-Maus-Takt (18.10.2026: vor jedem Anlegen wird das Alte abgeräumt, nie überschrieben)
+    private let trackers = ScreenRecTrackers()
+    /// 18.10.2026: Start-Nummer – ein Start, der nach einem await nicht mehr dran ist, baut nur seinen eigenen Stream ab
+    let gate = ScreenRecStartGate()
+    private var guardTicks = 0
+    private var spaceChecking = false
+    private var systemObservers: [NSObjectProtocol] = []
+    /// 16.10.2026 (Wunsch: „mit der Maus auf einen anderen Bildschirm gehen und der wird dann aufgenommen“):
+    /// das Video folgt der Maus über alle Bildschirme. Wechsel = (Zeit, Bildschirm-Rahmen, Name), erster Eintrag bei 0.
+    private var switches: [ScreenRecSwitch] = []
+    private var current: NSScreen?
+    private var pendingScreen: (screen: NSScreen, since: Date)?
+    private var switching = false
+    private var glowWin: SCWindow?
+    private var inkWin: SCWindow?
+    private var me: [SCRunningApplication] = []
+    static let followKey = "screenRecFollowMouse"
+    var followsMouse: Bool { UserDefaults.standard.object(forKey: Self.followKey) as? Bool ?? true }
 
     var isRecording: Bool { phase == .recording || phase == .starting }
     /// Pille während Countdown/Aufnahme (Diktat dazwischen kehrt hierher zurück)
@@ -107,6 +126,7 @@ final class ScreenRec: NSObject, SCRecordingOutputDelegate, SCStreamDelegate {
 
     func arm() {
         guard phase == .idle else { return }
+        guard enoughSpaceToStart() else { return }
         VFNotify.shared.dismiss(id: Self.doneID)
         sound = ScreenRecSound.stored(UserDefaults.standard.string(forKey: Self.soundKey))
         glow = UserDefaults.standard.bool(forKey: Self.glowKey)
@@ -136,7 +156,7 @@ final class ScreenRec: NSObject, SCRecordingOutputDelegate, SCStreamDelegate {
     private func showArmCard() {
         let s = target
         var n = VFNotice(id: Self.cardID, title: "Bildschirm aufnehmen",
-                         text: "Erkannt: \(Self.name(s))\(Self.sizeLabel(s)). Anderen? Maus hinbewegen.",
+                         text: "Erkannt: \(Self.name(s))\(Self.sizeLabel(s)). Anderen? Maus hinbewegen – beim Aufnehmen folgt das Video der Maus.",
                          illustration: "illu_bildschirm_aufnahme", fallbackSymbol: "record.circle")
         n.choices = ScreenRecSound.allCases.map(\.rawValue)
         n.preselect = ScreenRecSound.allCases.firstIndex(of: sound) ?? 2
@@ -166,6 +186,15 @@ final class ScreenRec: NSObject, SCRecordingOutputDelegate, SCStreamDelegate {
 
     private func begin(sound s: ScreenRecSound, glow g: Bool) {
         guard phase == .arming || phase == .idle else { return }
+        // auch für „Nochmal“ (geht nicht über arm): unter 5 GB frei gar nicht erst anfangen
+        guard enoughSpaceToStart() else {
+            armTimer?.invalidate(); armTimer = nil
+            frame?.hide(); frame = nil
+            VFNotify.shared.dismiss(id: Self.cardID)
+            phase = .idle
+            return
+        }
+        watchSystem()
         sound = s; glow = g
         UserDefaults.standard.set(s.rawValue, forKey: Self.soundKey)
         UserDefaults.standard.set(g, forKey: Self.glowKey)
@@ -197,65 +226,205 @@ final class ScreenRec: NSObject, SCRecordingOutputDelegate, SCStreamDelegate {
         pill?.view.showToast("Aufnahme abgebrochen")
     }
 
+    // MARK: Schutz: Speicherplatz, Ruhezustand/Sperre (18.10.2026)
+
+    /// Platte 90 % voll, eine Stunde Aufnahme bis ~23 GB → unter 5 GB frei gar nicht erst anfangen (Karte erklärt warum)
+    private func enoughSpaceToStart() -> Bool {
+        let free = ScreenRecGuard.freeBytes(at: Self.folder())
+        guard !ScreenRecGuard.mayStart(free: free), let free else { return true }
+        log("Bildschirmaufnahme: nicht gestartet – nur \(ScreenRecGuard.gb(free)) frei (mindestens \(ScreenRecGuard.gb(ScreenRecGuard.minFreeToStart)))")
+        VFNotify.shared.show(id: "aufnahme_speicher", title: "Zu wenig Speicher für eine Aufnahme",
+                             text: ScreenRecGuard.refuseText(free: free),
+                             illustration: "illu_bildschirm_aufnahme",
+                             primary: ("Speicher ansehen", {
+                                 NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.settings.Storage")!)
+                             }), secondary: ("OK", {}), timeout: 20)
+        return false
+    }
+
+    /// Ruhezustand, Bildschirmsperre, Benutzerwechsel → Aufnahme sauber beenden, statt dass macOS sie irgendwo
+    /// abschneidet (MP4 womöglich nie abgeschlossen). Einmal angemeldet, gilt für die ganze Laufzeit.
+    private func watchSystem() {
+        guard systemObservers.isEmpty else { return }
+        let ws = NSWorkspace.shared.notificationCenter
+        systemObservers.append(ws.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.systemSuspend("Ruhezustand", reason: "Gestoppt, weil der Mac in den Ruhezustand ging.", sync: true)
+        })
+        systemObservers.append(ws.addObserver(forName: NSWorkspace.sessionDidResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.systemSuspend("Benutzerwechsel/Sperre", reason: "Gestoppt, weil die Sitzung gewechselt oder gesperrt wurde.", sync: false)
+        })
+        systemObservers.append(DistributedNotificationCenter.default().addObserver(forName: Notification.Name("com.apple.screenIsLocked"),
+                                                                                  object: nil, queue: .main) { [weak self] _ in
+            self?.systemSuspend("Bildschirm gesperrt", reason: "Gestoppt, weil der Bildschirm gesperrt wurde.", sync: false)
+        })
+    }
+
+    /// sync: im Ruhezustand blockierend stoppen (macOS wartet auf willSleep-Beobachter), damit das MP4 vor dem
+    /// Schlafen abgeschlossen ist
+    private func systemSuspend(_ what: String, reason: String, sync: Bool) {
+        switch phase {
+        case .countdown:
+            log("Bildschirmaufnahme: Countdown abgebrochen – \(what)")
+            cancelCountdown()
+        case .starting:
+            abortStart(what)
+        case .recording:
+            log("Bildschirmaufnahme: gestoppt – \(what)")
+            stop(reason: reason, sync: sync)
+        default: break
+        }
+    }
+
     // MARK: 3. Aufnahme
 
     private func startCapture() {
+        // 18.10.2026: Stopp während „starting“ (SCShareableContent langsam) + neuer Start → der alte Task wachte im
+        // neuen „starting“ auf, kam am Phasen-Wächter vorbei und überschrieb Stream, Klick-Monitor und Maus-Takt.
+        // Darum: eigene Start-Nummer, nach JEDEM await geprüft; Stream/Monitore werden nur gesetzt, solange sie passt.
+        let g = gate.begin()
         phase = .starting
         frame?.hide(); frame = nil
         let screen = target ?? Self.screenUnderMouse()
         let sound = self.sound
         let url = Self.newFileURL()
+        // Reste eines früheren Starts (dürfte es nicht mehr geben) erst abräumen, nie überschreiben
+        trackers.removeAll()
+        glowView?.stop(); inkView?.stop()
         // Leuchten um die Maus: eigenes Fenster, das als einziges von Flow MIT ins Video kommt
-        if glow { let g = ScreenRecCursorGlow(); g.start(); glowView = g } else { glowView = nil }
+        let glowV: ScreenRecCursorGlow? = glow ? ScreenRecCursorGlow() : nil
+        glowV?.start()
+        glowView = glowV
+        // Zeichenstift (⌥ halten): Panel jetzt anlegen, damit es als Ausnahme mit ins Video kommt
+        let ink = ScreenRecInk(); ink.prepare(on: screen); inkView = ink
         fileURL = url
         Task { @MainActor in
+            // gehören nur diesem Start – abgebaut wird nur das hier, nie der Stream eines neueren Starts
+            var st: SCStream?, out: SCRecordingOutput?
             do {
                 let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+                guard self.gate.mayContinue(g, phase: self.phase) else {
+                    log("Bildschirmaufnahme: Start #\(g) überholt (gestoppt oder neu gestartet) – verworfen, bevor etwas lief")
+                    glowV?.stop(); ink.stop()
+                    return
+                }
                 let id = Self.displayID(screen)
                 guard let disp = content.displays.first(where: { $0.displayID == id }) ?? content.displays.first else {
                     throw NSError(domain: "ScreenRec", code: 1, userInfo: [NSLocalizedDescriptionKey: "kein Bildschirm gefunden"])
                 }
                 // Flow selbst (Pille, Karten, Rahmen) gehört nicht ins Video
                 let me = content.applications.filter { $0.processID == ProcessInfo.processInfo.processIdentifier }
-                let glowWin = self.glowView.flatMap { g in content.windows.first { $0.windowID == CGWindowID(g.windowNumber) } }
-                if self.glowView != nil && glowWin == nil { log("Bildschirmaufnahme: Maus-Leuchten nicht gefunden – Aufnahme ohne") }
-                let filter = SCContentFilter(display: disp, excludingApplications: me, exceptingWindows: glowWin.map { [$0] } ?? [])
+                let glowWin = glowV.flatMap { gv in content.windows.first { $0.windowID == CGWindowID(gv.windowNumber) } }
+                if glowV != nil && glowWin == nil { log("Bildschirmaufnahme: Maus-Leuchten nicht gefunden – Aufnahme ohne") }
+                let inkWin = content.windows.first { $0.windowID == CGWindowID(ink.windowNumber) }
+                let filter = SCContentFilter(display: disp, excludingApplications: me,
+                                             exceptingWindows: [glowWin, inkWin].compactMap { $0 })
                 let cfg = Self.configuration(display: disp, screen: screen, sound: sound)
-                let st = SCStream(filter: filter, configuration: cfg, delegate: self)
+                let s = SCStream(filter: filter, configuration: cfg, delegate: self)
+                st = s
                 let rc = SCRecordingOutputConfiguration()
                 rc.outputURL = url
                 rc.outputFileType = .mp4
                 rc.videoCodecType = .h264
-                let out = SCRecordingOutput(configuration: rc, delegate: self)
-                try st.addRecordingOutput(out)
-                self.stream = st; self.output = out
+                let o = SCRecordingOutput(configuration: rc, delegate: self)
+                out = o
+                try s.addRecordingOutput(o)
+                // seit dem Wächter oben kein await → dieser Start ist noch dran
+                self.me = me; self.glowWin = glowWin; self.inkWin = inkWin
+                self.stream = s; self.output = o
+                Self.setLive(s)
                 self.filter = filter; self.display = disp
-                try await st.startCapture()
-                guard self.phase == .starting else { try? await st.stopCapture(); return }
+                try await s.startCapture()
+                guard self.gate.mayContinue(g, phase: self.phase) else {
+                    log("Bildschirmaufnahme: Start #\(g) überholt, während macOS startete – Stream wieder abgebaut")
+                    await Self.tearDown(s, o, captureStarted: true, why: "veralteter Start")
+                    if self.stream === s { self.stream = nil; self.output = nil }
+                    glowV?.stop(); ink.stop()
+                    Self.watchFile(url, keep: false)
+                    return
+                }
                 self.startedAt = Date()
                 self.clicks = []
                 let t0 = self.startedAt
-                self.clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown]) { [weak self] _ in
-                    self?.clicks.append(Date().timeIntervalSince(t0))
-                }
+                self.clickInfos = []
+                ink.start(at: t0)
+                self.pill?.view.showToast("⌥ halten = auf dem Bildschirm zeichnen", seconds: 2.6)
                 self.mouse = []
-                let mt = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
-                    guard let self else { return }
-                    let m = NSEvent.mouseLocation
-                    self.mouse.append(ScreenRecMouse(t: Date().timeIntervalSince(t0), x: m.x, y: m.y))
-                }
-                RunLoop.main.add(mt, forMode: .common)
-                self.mouseTimer = mt
+                self.current = screen
+                self.pendingScreen = nil
+                self.switches = [ScreenRecSwitch(t: 0, frame: screen?.frame ?? .zero, name: Self.name(screen))]
+                self.installTrackers(t0: t0, gen: g)
                 self.phase = .recording
                 self.setPill(.screenRec(start: self.startedAt))
                 self.startGuard()
-                log("Bildschirmaufnahme läuft: \(Self.name(screen)) \(cfg.width)×\(cfg.height), \(sound.rawValue)\(self.glowView != nil ? ", Maus leuchtet" : "") → \(url.lastPathComponent)")
+                log("Bildschirmaufnahme läuft: \(Self.name(screen)) \(cfg.width)×\(cfg.height), \(sound.rawValue)\(glowV != nil ? ", Maus leuchtet" : "") → \(url.lastPathComponent)")
             } catch {
-                log("Bildschirmaufnahme: Start fehlgeschlagen – \(error.localizedDescription)")
-                self.reset()
-                self.pill?.view.showToast("Aufnahme ging nicht: \(error.localizedDescription.prefix(50))", seconds: 4)
+                log("Bildschirmaufnahme: Start #\(g) fehlgeschlagen – \(error.localizedDescription)")
+                // 18.10.2026: Ausgabe hing schon am Stream → replayd schrieb nach „Mikrofon konnte nicht starten“
+                // 1,5 h unbemerkt weiter (18 GB, Flow-Neustart half nicht). Darum Ausgabe abhängen + Stream stoppen,
+                // die angefangene Datei prüfen (wächst sie → Warnung, steht sie → Papierkorb).
+                await Self.tearDown(st, out, captureStarted: false, why: "Fehlstart")
+                Self.watchFile(url, keep: false)
+                if self.gate.mayContinue(g, phase: self.phase) {
+                    self.reset()
+                    self.pill?.view.showToast("Aufnahme ging nicht: \(error.localizedDescription.prefix(50))", seconds: 4)
+                } else {
+                    // schon überholt: nur die eigenen Reste, den neueren Start nicht anfassen
+                    if let st, self.stream === st { self.stream = nil; self.output = nil }
+                    glowV?.stop(); ink.stop()
+                }
             }
         }
+    }
+
+    /// Klick-Monitor (Schlüsselbilder + Klick-Kontext) und 30-Hz-Maus-Takt (Mausspur, Video folgt der Maus).
+    /// `replace` räumt vorher alles Alte ab – zwei Starts hinterließen sonst einen verwaisten globalen Monitor und Takt.
+    private func installTrackers(t0: Date, gen g: Int) {
+        trackers.replace([
+            { [weak self] in
+                let m = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown]) { [weak self] _ in
+                    guard let self, self.gate.isCurrent(g), self.phase == .recording else { return }
+                    let t = Date().timeIntervalSince(t0), p = NSEvent.mouseLocation
+                    self.clicks.append(t)
+                    ScreenRecClickProbe.queue.async {
+                        guard let info = ScreenRecClickProbe.describe(at: p, t: t) else { return }
+                        DispatchQueue.main.async { [weak self] in
+                            guard let self, self.gate.isCurrent(g) else { return }   // nie in die nächste Aufnahme
+                            self.clickInfos.append(info)
+                        }
+                    }
+                }
+                return { if let m { NSEvent.removeMonitor(m) } }
+            },
+            { [weak self] in
+                let mt = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] _ in
+                    guard let self, self.phase == .recording else { return }
+                    let m = NSEvent.mouseLocation
+                    self.mouse.append(ScreenRecMouse(t: Date().timeIntervalSince(t0), x: m.x, y: m.y))
+                    self.followMouse(m)
+                }
+                RunLoop.main.add(mt, forMode: .common)
+                return { mt.invalidate() }
+            },
+        ])
+    }
+
+    /// Stopp/Ruhezustand/Fehler während „starting“: Start-Nummer ungültig machen. Der Start-Task baut beim Aufwachen
+    /// seinen Stream selbst ab; hängt schon einer am Objekt, wird er sofort mit abgebaut (falls macOS nie zurückkommt).
+    private func abortStart(_ why: String, toast: String = "Aufnahme abgebrochen") {
+        guard phase == .starting else { return }
+        gate.cancel()
+        let st = stream, url = fileURL
+        log("Bildschirmaufnahme: Start abgebrochen – \(why)")
+        reset()
+        if let st {
+            Task { @MainActor in
+                // Start läuft noch: nur stoppen. Wirft startCapture danach, hängt der Start-Task die Ausgabe selbst ab
+                // (Fehlstart); kommt es zurück, stoppt er als „veralteter Start“ – nie beides auf einem laufenden Writer.
+                await Self.tearDown(st, nil, captureStarted: true, why: why)
+                if let url { Self.watchFile(url, keep: false) }
+            }
+        }
+        pill?.view.showToast(toast, seconds: 2.5)
     }
 
     static func configuration(display: SCDisplay, screen: NSScreen?, sound: ScreenRecSound) -> SCStreamConfiguration {
@@ -270,70 +439,295 @@ final class ScreenRec: NSObject, SCRecordingOutputDelegate, SCStreamDelegate {
         cfg.capturesAudio = sound == .system
         cfg.excludesCurrentProcessAudio = true
         cfg.captureMicrophone = sound == .mic
+        // Wechselt das Video auf einen anders geformten Bildschirm: einpassen statt verzerren
+        cfg.scalesToFit = true
+        cfg.preservesAspectRatio = true
         return cfg
     }
 
-    /// Pille bleibt auf „Aufnahme“, auch wenn Diktat oder Meeting sie zwischendurch umstellen
+    /// Maus steht ≥ 0,35 s auf einem anderen Bildschirm → Video wechselt dorthin (gleiche Datei, kein Neustart)
+    private func followMouse(_ m: NSPoint) {
+        guard followsMouse, phase == .recording, !switching, NSScreen.screens.count > 1 else { return }
+        guard let s = NSScreen.screens.first(where: { NSMouseInRect(m, $0.frame, false) }) else { return }
+        if s == current { pendingScreen = nil; return }
+        if let p = pendingScreen, p.screen == s {
+            if Date().timeIntervalSince(p.since) >= 0.35 { switchTo(s) }
+        } else {
+            pendingScreen = (s, Date())
+        }
+    }
+
+    private func switchTo(_ s: NSScreen) {
+        guard let st = stream else { return }
+        switching = true
+        pendingScreen = nil
+        let id = Self.displayID(s), t = Date().timeIntervalSince(startedAt)
+        Task { @MainActor in
+            defer { self.switching = false }
+            do {
+                let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+                // dieselbe Aufnahme? (inzwischen gestoppt/neu gestartet → nichts anfassen)
+                guard self.phase == .recording, self.stream === st, let disp = content.displays.first(where: { $0.displayID == id }) else { return }
+                // Stift-Panel mitnehmen (gleiches Fenster → bleibt Ausnahme im Filter)
+                self.inkView?.move(to: s)
+                let f = SCContentFilter(display: disp, excludingApplications: self.me,
+                                        exceptingWindows: [self.glowWin, self.inkWin].compactMap { $0 })
+                try await st.updateContentFilter(f)
+                guard self.stream === st else { return }
+                self.filter = f; self.display = disp
+                self.current = s
+                self.switches.append(ScreenRecSwitch(t: t, frame: s.frame, name: Self.name(s)))
+                log("Bildschirmaufnahme: Bildschirm gewechselt → \(Self.name(s)) bei \(String(format: "%.1f", t)) s")
+            } catch {
+                log("Bildschirmaufnahme: Wechsel auf \(Self.name(s)) ging nicht – \(error.localizedDescription)")
+                self.current = s   // nicht ständig neu versuchen
+            }
+        }
+    }
+
+    /// Pille bleibt auf „Aufnahme“, auch wenn Diktat oder Meeting sie zwischendurch umstellen.
+    /// 18.10.2026: alle 10 s zusätzlich der freie Platz (abseits des Main-Threads) – unter 2 GB sauber stoppen.
     private func startGuard() {
         guardTimer?.invalidate()
+        guardTicks = 0; spaceChecking = false
+        let g = gate.current, dir = fileURL?.deletingLastPathComponent() ?? Self.folder()
         let t = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
-            guard let self, self.phase == .recording, let v = self.pill?.view else { return }
-            if case .idle = v.mode { v.mode = .screenRec(start: self.startedAt) }
-            if case .meeting = v.mode { v.mode = .screenRec(start: self.startedAt) }
+            guard let self, self.phase == .recording else { return }
+            if let v = self.pill?.view {
+                if case .idle = v.mode { v.mode = .screenRec(start: self.startedAt) }
+                if case .meeting = v.mode { v.mode = .screenRec(start: self.startedAt) }
+            }
+            self.guardTicks += 1
+            guard ScreenRecGuard.spaceDue(tick: self.guardTicks), !self.spaceChecking else { return }
+            self.spaceChecking = true
+            DispatchQueue.global(qos: .utility).async { [weak self] in
+                let free = ScreenRecGuard.freeBytes(at: dir)
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    self.spaceChecking = false
+                    guard self.phase == .recording, self.gate.isCurrent(g), ScreenRecGuard.mustStop(free: free), let free else { return }
+                    log("Bildschirmaufnahme: nur noch \(ScreenRecGuard.gb(free)) frei – automatisch gestoppt")
+                    self.stop(reason: ScreenRecGuard.stopText(free: free))
+                    self.pill?.view.showToast("Speicher fast voll – Aufnahme gestoppt", seconds: 4)
+                }
+            }
         }
         RunLoop.main.add(t, forMode: .common)
         guardTimer = t
     }
 
-    func stop() {
-        guard isRecording, let st = stream else { if phase == .starting { reset() }; return }
+    /// reason: warum automatisch gestoppt wurde (Speicher, Ruhezustand, macOS) – steht dann in der Fertig-Karte.
+    /// sync: blockierend stoppen (Ruhezustand), höchstens 1,5 s.
+    func stop(reason: String? = nil, sync: Bool = false) {
+        // Stopp während „starting“ = Abbruch: Start-Nummer ungültig, der Start-Task räumt seinen Stream selbst ab
+        if phase == .starting { abortStart(reason ?? "Stopp während des Starts"); return }
+        guard phase == .recording, let st = stream else { return }
+        let g = gate.current, out = output
         phase = .finishing
         guardTimer?.invalidate(); guardTimer = nil
         glowView?.stop(); glowView = nil
-        if let m = clickMonitor { NSEvent.removeMonitor(m) }; clickMonitor = nil
-        mouseTimer?.invalidate(); mouseTimer = nil
-        // Karte SOFORT zeigen (sonst wirkt es sekundenlang, als käme nichts); Datei, Vorschaubild und Transkript
-        // kommen dahinter nach (Kopieren wartet, falls die Datei noch nicht fertig ist).
+        trackers.removeAll()
+        // Markierungen fürs Video lesen, BEVOR der Stift aufräumt
+        let inkMarks = inkView?.marks ?? []
+        inkView?.stop(); inkView = nil
+        // 15.10.2026 (Wunsch: „5 s lang kam nichts – wo ist das Video?“): Karte SOFORT zeigen; Datei, Vorschaubild und
+        // Transkript kommen dahinter nach (Kopieren wartet, falls die Datei noch nicht fertig ist).
         if let url = fileURL {
             let d = ScreenRecDone(url: url, duration: Date().timeIntervalSince(startedAt), screen: Self.name(target), sound: sound)
             d.clicks = clicks
+            d.clickInfos = clickInfos
+            d.marks = inkMarks.map { [$0.start, $0.end] }
+            d.markBoxes = inkMarks.map(\.box)
             d.mouse = mouse
             d.screenFrame = target?.frame ?? Self.screenUnderMouse()?.frame ?? .zero
+            d.switches = switches.isEmpty ? [ScreenRecSwitch(t: 0, frame: d.screenFrame, name: d.screen)] : switches
+            let names = Set(d.switches.map(\.name))
+            if names.count > 1 { d.screen = "\(names.count) Bildschirme" }
+            d.stopReason = reason
             d.onChange = { [weak self, weak d] in if let d { self?.showDone(d) } }
             done = d
             showDone(d)
         }
         setPill(fallbackMode())
+        if sync {
+            let ok = Self.stopNow(st, timeout: 1.5)
+            log("Bildschirmaufnahme: blockierend gestoppt\(ok ? "" : " (ohne Rückmeldung nach 1,5 s)")")
+        }
         Task { @MainActor in
-            do { try await st.stopCapture() } catch { log("Bildschirmaufnahme: Stopp – \(error.localizedDescription)") }
-            // fertig wird die Datei erst mit recordingOutputDidFinishRecording; Sicherheitsnetz nach 6 s
+            if !sync { await Self.tearDown(st, out, captureStarted: true, why: reason == nil ? "Stopp" : "automatischer Stopp") }
+            // fertig wird die Datei erst mit recordingOutputDidFinishRecording; Sicherheitsnetz nach 6 s – nur für
+            // DIESE Aufnahme (vorher konnte es eine schnell folgende nächste vorzeitig „fertig“ machen)
             DispatchQueue.main.asyncAfter(deadline: .now() + 6) { [weak self] in
-                guard let self, self.phase == .finishing else { return }
+                guard let self, self.gate.netMayFire(g, phase: self.phase) else { return }
+                log("Bildschirmaufnahme: keine Fertig-Meldung nach 6 s – Sicherheitsnetz")
                 self.finished()
             }
         }
     }
 
-    // SCRecordingOutputDelegate
+    // MARK: Abbau (18.10.2026): ein Weg für jedes Ende
+
+    /// Was beim Abbau passiert. 19.10.2026 – fünf Aufnahmen hintereinander „beschädigt“ (kein moov-Atom, replayd-Absturz
+    /// in -[AVAssetWriter endSessionAtSourceTime:] bei JEDEM Stopp seit 1.7.56): Ausgabe abhängen UND Stream stoppen ließ
+    /// replayd die Datei zweimal abschließen (exportAndInvalidate 2× in 1 ms) – der zweite Aufruf brach replayd ab. War der
+    /// erste schon fertig, blieb das Video heil, sonst fehlte der Index. Darum: läuft die Aufnahme (startCapture kam
+    /// zurück), NUR stopCapture – so lief es bis 1.7.55 wochenlang. Ausgabe abhängen nur beim Fehlstart (startCapture
+    /// warf, die Ausgabe hing aber schon dran – sonst schreibt replayd weiter, 18.10.: 18 GB).
+    enum TeardownStep: Equatable { case detachOutput, stopCapture }
+    static func teardownSteps(captureStarted: Bool, hasOutput: Bool) -> [TeardownStep] {
+        captureStarted || !hasOutput ? [.stopCapture] : [.detachOutput, .stopCapture]
+    }
+
+    /// Ein Weg für jedes Ende; danach prüft `watchFile`, ob die Datei trotzdem weiterwächst (replayd-Geist).
+    @MainActor static func tearDown(_ st: SCStream?, _ out: SCRecordingOutput?, captureStarted: Bool, why: String) async {
+        guard let st else { return }
+        for step in teardownSteps(captureStarted: captureStarted, hasOutput: out != nil) {
+            switch step {
+            case .detachOutput:
+                if let out { do { try st.removeRecordingOutput(out) } catch { log("Bildschirmaufnahme: Ausgabe abhängen (\(why)) – \(error.localizedDescription)") } }
+            case .stopCapture:
+                do { try await st.stopCapture() } catch { log("Bildschirmaufnahme: Stopp (\(why)) – \(error.localizedDescription)") }
+            }
+        }
+        setLive(nil, if: st)
+    }
+
+    /// Laufende Aufnahme blockierend stoppen (Ruhezustand): höchstens `timeout` auf macOS warten – nur stopCapture (s. o.)
+    @discardableResult
+    static func stopNow(_ st: SCStream, timeout: TimeInterval) -> Bool {
+        let sem = DispatchSemaphore(value: 0)
+        st.stopCapture { _ in sem.signal() }
+        let ok = sem.wait(timeout: .now() + timeout) == .success
+        setLive(nil, if: st)
+        return ok
+    }
+
+    /// Je Datei zählt nur die letzte Prüfung (Abbruch + aufwachender Start-Task prüfen dieselbe Datei)
+    private static var watchTokens: [String: Int] = [:]
+
+    /// Nach jedem Ende: Datei nach ~2 s und ~5 s messen. keep = fertige Aufnahme → nie löschen, nur warnen, wenn sie
+    /// weiterwächst. Sonst (angefangene Datei eines Fehlstarts/Abbruchs): steht sie still → Papierkorb, wächst sie → Warnung.
+    static func watchFile(_ url: URL, keep: Bool) {
+        let key = url.path
+        let tok = (watchTokens[key] ?? 0) + 1
+        watchTokens[key] = tok
+        ScreenRecGuard.sampleGrowth(url) { g, a, b in
+            guard watchTokens[key] == tok else { return }
+            watchTokens[key] = nil
+            switch ScreenRecGuard.action(g, keep: keep) {
+            case .none: break
+            case .trash:
+                try? FileManager.default.trashItem(at: url, resultingItemURL: nil)
+                log("Bildschirmaufnahme: angefangene Datei in den Papierkorb (\(max(b, 0)) B)")
+            case .warn:
+                log("Bildschirmaufnahme: ACHTUNG – \(url.lastPathComponent) wächst \(keep ? "nach dem Stopp" : "nach Fehlstart") weiter (\(a) → \(b) B), replayd schreibt")
+                showGhost(url, keep: keep, size: b)
+            }
+        }
+    }
+
+    /// Warnung „läuft weiter“ – nur, wenn die Datei nachweislich wächst (sonst kommt die Karte gar nicht)
+    private static func showGhost(_ url: URL, keep: Bool, size: Int) {
+        let what = keep ? "macOS schreibt nach dem Stopp weiter in „\(url.lastPathComponent)“"
+                        : "macOS nimmt nach einem Fehlstart im Hintergrund weiter auf"
+        VFNotify.shared.show(id: "aufnahme_geist", title: "Aufnahme läuft im Hintergrund weiter",
+                             text: "\(what) (schon \(ScreenRecGuard.gb(Int64(size))), wächst). Stoppen beendet den macOS-Aufnahmedienst – "
+                                + "auch andere laufende Bildschirmaufnahmen (z. B. QuickTime, Meeting-Kontext) brechen dann ab.",
+                             illustration: "illu_bildschirm_aufnahme",
+                             primary: ("Stoppen", { killReplaydIfGrowing(url, keep: keep) }), secondary: ("Später", {}), timeout: nil)
+    }
+
+    /// „Stoppen“: erst noch einmal messen. `killall -9 replayd` trifft ALLE Bildschirmaufnahmen des Macs – darum nur,
+    /// wenn die Datei JETZT noch wächst.
+    private static func killReplaydIfGrowing(_ url: URL, keep: Bool) {
+        ScreenRecGuard.sampleGrowth(url, after: 0, gap: 1.5) { g, a, b in
+            guard ScreenRecGuard.mayKillReplayd(g) else {
+                log("Bildschirmaufnahme: Stoppen gedrückt, Datei wächst nicht mehr (\(a) → \(b) B) – replayd NICHT beendet")
+                ScreenRec.shared.pill?.view.showToast("Aufnahme hat inzwischen aufgehört – nichts beendet", seconds: 3)
+                if !keep { watchFile(url, keep: false) }
+                return
+            }
+            let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
+            p.arguments = ["-9", "replayd"]; try? p.run()
+            log("Bildschirmaufnahme: replayd beendet (Datei wuchs weiter: \(a) → \(b) B)")
+            if !keep { watchFile(url, keep: false) }   // steht sie danach still → Papierkorb
+        }
+    }
+
+    // MARK: Beenden der App
+
+    /// Laufender Stream, thread-sicher – für das Beenden (Quit, Update, SIGTERM). Ohne das endete die App mitten in
+    /// der Aufnahme: MP4 nie abgeschlossen (Video verloren) und replayd schrieb womöglich weiter (18.10.: 18-GB-Geist).
+    private static let liveLock = NSLock()
+    nonisolated(unsafe) private static var live: SCStream?
+    static var hasLive: Bool { liveLock.lock(); defer { liveLock.unlock() }; return live != nil }
+
+    static func setLive(_ s: SCStream?, if current: SCStream? = nil) {
+        liveLock.lock(); defer { liveLock.unlock() }
+        if s == nil, let current, live !== current { return }   // ein neuerer Stream bleibt stehen
+        live = s
+    }
+
+    /// Von jedem Thread: laufenden Stream stoppen (replayd schließt die Datei ab), höchstens `timeout` warten.
+    static func finishForQuit(timeout: TimeInterval = 1.2) {
+        liveLock.lock(); let st = live; live = nil; liveLock.unlock()
+        guard let st else { return }
+        let sem = DispatchSemaphore(value: 0)
+        st.stopCapture { _ in sem.signal() }
+        let ok = sem.wait(timeout: .now() + timeout) == .success
+        log("Bildschirmaufnahme beim Beenden gestoppt\(ok ? "" : " (ohne Rückmeldung)")")
+    }
+
+    /// Wo die Pille auf diesem Bildschirm steht (gespeicherte Position) – falls die echte Pille nicht greifbar ist
+    static func pillGuess(_ s: NSScreen) -> NSRect {
+        let pl = Settings.shared.placement(for: s)
+        let c = pl.center(in: s.visibleFrame)
+        let size = pl.isSide ? NSSize(width: 26, height: 118) : NSSize(width: 118, height: 26)
+        return NSRect(x: c.x - size.width / 2, y: c.y - size.height / 2, width: size.width, height: size.height)
+    }
+
+    // SCRecordingOutputDelegate – 18.10.2026: nur Rückrufe der AKTUELLEN Ausgabe zählen; eine alte (überholter
+    // Start, vorige Aufnahme) beendete sonst die nächste vorzeitig
     func recordingOutputDidFinishRecording(_ r: SCRecordingOutput) {
-        DispatchQueue.main.async { [weak self] in if self?.phase == .finishing { self?.finished() } }
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            guard ScreenRecGuard.accept(.finish, from: r, current: self.output, phase: self.phase) else {
+                if !ScreenRecGuard.isCurrent(r, self.output) { log("Bildschirmaufnahme: Fertig-Meldung einer alten Ausgabe – ignoriert") }
+                return
+            }
+            self.finished()
+        }
     }
     func recordingOutput(_ r: SCRecordingOutput, didFailWithError error: Error) {
         DispatchQueue.main.async { [weak self] in
-            log("Bildschirmaufnahme: Datei-Fehler – \(error.localizedDescription)")
             guard let self else { return }
-            if self.phase == .recording || self.phase == .starting { self.stop() }
+            guard ScreenRecGuard.accept(.fileError, from: r, current: self.output, phase: self.phase) else {
+                log("Bildschirmaufnahme: Datei-Fehler einer alten Ausgabe – ignoriert (\(error.localizedDescription))"); return
+            }
+            log("Bildschirmaufnahme: Datei-Fehler – \(error.localizedDescription)")
+            switch self.phase {
+            case .starting: self.abortStart("Datei-Fehler", toast: "Aufnahme ging nicht: \(error.localizedDescription.prefix(50))")
+            case .recording: self.stop(reason: "Gestoppt: macOS konnte die Datei nicht weiterschreiben.")
+            case .finishing: self.finished()   // Abspiel-Prüfung entscheidet, ob die Datei taugt
+            default: break
+            }
         }
     }
-    // SCStreamDelegate: z. B. Bildschirm abgesteckt, Freigabe entzogen
+    // SCStreamDelegate: z. B. Bildschirm abgesteckt, Freigabe entzogen. Gleicher Abbau wie beim Stopp (Ausgabe
+    // abhängen, Stream stoppen, Datei prüfen) – vorher blieb die Ausgabe hängen und niemand sah nach, ob sie weiterwächst.
     func stream(_ stream: SCStream, didStopWithError error: Error) {
         DispatchQueue.main.async { [weak self] in
-            guard let self, self.isRecording else { return }
+            guard let self else { return }
+            guard ScreenRecGuard.accept(.streamStop, from: stream, current: self.stream, phase: self.phase) else {
+                if !ScreenRecGuard.isCurrent(stream, self.stream) { log("Bildschirmaufnahme: Stopp-Meldung eines alten Streams – ignoriert") }
+                return
+            }
             log("Bildschirmaufnahme: von macOS beendet – \(error.localizedDescription)")
-            self.phase = .finishing
-            self.guardTimer?.invalidate(); self.guardTimer = nil
-            self.setPill(self.fallbackMode())
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { if self.phase == .finishing { self.finished() } }
+            if self.phase == .starting {
+                self.abortStart("von macOS beendet", toast: "Aufnahme ging nicht: \(error.localizedDescription.prefix(50))")
+            } else {
+                self.stop(reason: "Von macOS beendet (\(error.localizedDescription.prefix(60))).")
+            }
         }
     }
 
@@ -344,18 +738,34 @@ final class ScreenRec: NSObject, SCRecordingOutputDelegate, SCStreamDelegate {
         let d = done
         reset()
         guard let url, let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize, size > 0 else {
+            if let url { Self.watchFile(url, keep: true) }   // leer, aber schreibt macOS doch noch? → warnen
             VFNotify.shared.dismiss(id: Self.doneID)
             pill?.view.showToast("Aufnahme leer – nichts gespeichert", seconds: 3); return
         }
         log("Bildschirmaufnahme fertig: \(url.lastPathComponent), \(Int(d?.duration ?? 0)) s, \(size / 1_000_000) MB")
         let done = d ?? ScreenRecDone(url: url, duration: 0, screen: Self.name(screen), sound: sound)
         if d == nil { done.onChange = { [weak self, weak done] in if let done { self?.showDone(done) } }; self.done = done }
-        done.fileReady()
+        // wächst die fertige Datei weiter (replayd-Geist)? → warnen, nie löschen
+        Self.watchFile(url, keep: true)
         Task { @MainActor in
+            // 18.10.2026: erst prüfen, ob das MP4 abspielbar ist (Spuren + Dauer, abseits des Main-Threads) – sonst
+            // hieß es „Aufnahme fertig“ und „Kopieren“ legte eine kaputte Datei in die Zwischenablage.
+            // Bis zu 3 Versuche (0 / 2 / 4 s): kam die Fertig-Meldung nicht, schreibt macOS evtl. noch den Abschluss.
+            var ok = false
+            for wait in [0.0, 2, 2] {
+                if wait > 0 { try? await Task.sleep(nanoseconds: UInt64(wait * 1e9)) }
+                if await ScreenRecGuard.playable(url) { ok = true; break }
+            }
+            guard ok else {
+                log("Bildschirmaufnahme: \(url.lastPathComponent) lässt sich nicht abspielen (\(size / 1_000_000) MB) – kein Kopieren angeboten")
+                done.markBroken()
+                return
+            }
+            done.fileReady()
+            done.buildContext()
             done.thumbnail = await Self.thumbnail(of: url)
             done.changed()
         }
-        done.buildContext()
     }
 
     /// Karte „Aufnahme fertig“ zeigen bzw. aktualisieren – aber nie wieder öffnen, wenn sie schon zu ist
@@ -364,7 +774,7 @@ final class ScreenRec: NSObject, SCRecordingOutputDelegate, SCStreamDelegate {
         if d.shownOnce && VFNotify.shared.currentID != Self.doneID { return }
         d.shownOnce = true
         let n = Self.doneNotice(d,
-            copy: { [weak d] in d?.copyRequested(VFNotify.shared.chosen == "Nur Video" ? .video : .withContext) },
+            copy: { [weak d] in d?.copyRequested(VFNotify.shared.chosen.flatMap(ScreenRecCopy.init(rawValue:)) ?? .withContext) },
             again: { [weak self, weak d] in
                 d?.cardOpen = false
                 guard let self, self.phase == .idle, let d else { return }
@@ -378,20 +788,37 @@ final class ScreenRec: NSObject, SCRecordingOutputDelegate, SCStreamDelegate {
 
     static func doneNotice(_ d: ScreenRecDone, copy: @escaping () -> Void, again: @escaping () -> Void, closed: @escaping () -> Void = {}) -> VFNotice {
         let sec = max(1, Int(d.duration.rounded()))
+        let why = d.stopReason.map { "\($0) " } ?? ""
+        // 18.10.2026: Datei nicht abspielbar → sagen, statt eine kaputte Datei zum Kopieren anzubieten
+        if d.broken {
+            var n = VFNotice(id: doneID, title: "Aufnahme beschädigt · \(sec / 60):\(String(format: "%02d", sec % 60))",
+                             text: "\(why)\(d.screen), \(d.sound.short). Die Datei lässt sich nicht abspielen – darum kein Kopieren. Sie liegt unverändert im Ordner.",
+                             illustration: "illu_aufnahme_fertig", fallbackSymbol: "exclamationmark.triangle.fill")
+            let u = d.url
+            n.primary = ("Im Finder zeigen", { NSWorkspace.shared.activateFileViewerSelecting([u]) })
+            n.secondary = ("Nochmal", again)
+            n.timeout = nil
+            n.onClose = closed
+            n.thumbnailCaption = u.lastPathComponent
+            return n
+        }
         let state: String
         if !d.ready { state = "Wird gespeichert …" }
-        else if d.context == nil { state = d.sound == .mic ? "Transkript und Bilder werden erstellt …" : "Schlüsselbilder werden erstellt …" }
+        else if d.context == nil { state = d.sound.transcribes ? "Transkript und Bilder werden erstellt …" : "Schlüsselbilder werden erstellt …" }
         else {
             let n = d.keyframes.count, sp = d.trails.count
-            state = (d.sound == .mic ? (d.saidSomething ? "Transkript + " : "Nichts gesprochen · ") : "") + "\(n) Bild\(n == 1 ? "" : "er")"
+            let ck = d.clickInfos.count, mk = d.marks.count
+            state = (d.sound.transcribes ? (d.saidSomething ? "Transkript + " : "Nichts gesprochen · ") : "") + "\(n) Bild\(n == 1 ? "" : "er")"
+                + (ck > 0 ? " + \(ck) Klick\(ck == 1 ? "" : "s")" : "") + (mk > 0 ? " + \(mk) Markierung\(mk == 1 ? "" : "en")" : "")
                 + (sp > 0 ? " + \(sp) Mausspur\(sp == 1 ? "" : "en")" : "") + " für den Agent."
         }
         var n = VFNotice(id: doneID, title: "Aufnahme fertig · \(sec / 60):\(String(format: "%02d", sec % 60))",
-                         text: "\(d.screen), \(d.sound.short). \(state)",
+                         text: "\(why)\(d.screen), \(d.sound.short). \(state)",
                          illustration: "illu_aufnahme_fertig", fallbackSymbol: "play.rectangle.fill")
         n.primary = ("Kopieren", copy)
         n.secondary = ("Nochmal", again)
-        n.timeout = 45
+        // automatisch gestoppt (Speicher, Ruhezustand, Sperre): Karte bleibt, bis man zurück ist
+        n.timeout = d.stopReason == nil ? 45 : nil
         n.onClose = closed
         n.choices = ScreenRecCopy.allCases.map { ScreenRecCopy.label($0, sound: d.sound) }
         n.preselect = 1   // für den Agent: Kontext ist meist gewollt
@@ -402,7 +829,8 @@ final class ScreenRec: NSObject, SCRecordingOutputDelegate, SCStreamDelegate {
 
     /// Echte Datei + Pfad als Text (wie ClipVault): ⌘V fügt das Video in Chats/Mail/Finder ein, im Terminal den Pfad.
     /// Mit Transkript: der Text-Teil enthält zusätzlich, was im Video gesagt wurde (mit Zeitmarken) – für Agents.
-    func copy(_ url: URL, context: String? = nil) {
+    @discardableResult
+    func copy(_ url: URL, context: String? = nil, isTask: Bool = false, quiet: Bool = false) -> Int {
         let it = NSPasteboardItem()
         it.setString(url.absoluteString, forType: .fileURL)
         var text = Self.shellEscape(url.path)
@@ -411,8 +839,22 @@ final class ScreenRec: NSObject, SCRecordingOutputDelegate, SCStreamDelegate {
         it.setString(text, forType: .string)
         let pb = NSPasteboard.general
         pb.clearContents(); pb.writeObjects([it])
-        pill?.view.showToast(transcript?.isEmpty == false ? "Video + Kontext kopiert – ⌘V" : "Video kopiert – ⌘V zum Einfügen", seconds: 2.4)
+        let cc = pb.changeCount
+        if quiet { log("Bildschirmaufnahme kopiert (Video sofort, Kontext folgt): \(url.lastPathComponent)"); return cc }
+        pill?.view.showToast(isTask ? "Auftrag kopiert – ⌘V beim Agent" : (transcript?.isEmpty == false ? "Video + Kontext kopiert – ⌘V" : "Video kopiert – ⌘V zum Einfügen"), seconds: 2.4)
         log("Bildschirmaufnahme kopiert: \(url.lastPathComponent)\(transcript?.isEmpty == false ? " + Kontext" : "")")
+        return cc
+    }
+
+    /// Auftrag fertig, aber die Zwischenablage ist inzwischen anders belegt: nicht überschreiben, sondern Karte anbieten
+    func copyLater(_ url: URL, task: String) {
+        var n = VFNotice(id: "screenrec.task", title: "Auftrag ist fertig",
+                         text: "Du hast inzwischen etwas anderes kopiert – deshalb liegt der Auftrag noch nicht in der Zwischenablage.",
+                         illustration: "illu_aufnahme_fertig", fallbackSymbol: "sparkles")
+        n.primary = ("Auftrag kopieren", { [weak self] in self?.copy(url, context: task, isTask: true) })
+        n.timeout = 30
+        VFNotify.shared.show(n)
+        log("Bildschirmaufnahme: Auftrag fertig, Zwischenablage belegt – Karte angeboten")
     }
 
     // MARK: Hilfen
@@ -429,8 +871,8 @@ final class ScreenRec: NSObject, SCRecordingOutputDelegate, SCStreamDelegate {
         guardTimer?.invalidate(); guardTimer = nil
         frame?.hide(); frame = nil
         glowView?.stop(); glowView = nil
-        if let m = clickMonitor { NSEvent.removeMonitor(m) }; clickMonitor = nil
-        mouseTimer?.invalidate(); mouseTimer = nil
+        trackers.removeAll()
+        inkView?.stop(); inkView = nil
         stream = nil; output = nil; filter = nil; display = nil
         phase = .idle
         if let v = pill?.view {
@@ -525,13 +967,25 @@ final class ScreenRec: NSObject, SCRecordingOutputDelegate, SCStreamDelegate {
 final class ScreenRecDone {
     let url: URL
     let duration: TimeInterval
-    let screen: String
+    var screen: String
     let sound: ScreenRecSound
     var clicks: [TimeInterval] = []
+    var clickInfos: [ScreenRecClickInfo] = []
+    /// Markierungen mit dem Zeichenstift: [Start, Ende] in Sekunden
+    var marks: [[Double]] = []
+    /// Rahmen jeder Markierung (Bildschirm-Punkte, global) – gleiche Reihenfolge wie `marks`
+    var markBoxes: [NSRect] = []
+    private var task: String?
+    private var taskRunning = false
     var mouse: [ScreenRecMouse] = []
     var screenFrame: NSRect = .zero
+    var switches: [ScreenRecSwitch] = []
     private(set) var trails: [ScreenRecTrail] = []
     private(set) var ready = false
+    /// 18.10.2026: Datei ließ sich nicht abspielen → Karte sagt es, Kopieren gibt es nicht
+    private(set) var broken = false
+    /// automatisch gestoppt (Speicher fast voll, Ruhezustand, Sperre, macOS) – erster Satz der Karte
+    var stopReason: String?
     var thumbnail: URL?
     /// fertiger Kontext-Text für Agents (Transkript + Bilder); nil = wird noch erstellt
     private(set) var context: String?
@@ -541,6 +995,11 @@ final class ScreenRecDone {
     var shownOnce = false
     var onChange: () -> Void = {}
     private var pendingCopy: ScreenRecCopy?
+    /// 15.10.2026 (Wunsch: „auf Kopieren gedrückt – kam nichts in die Zwischenablage“): Video liegt sofort drin; der Auftrag
+    /// ersetzt es nur, solange seitdem nichts anderes kopiert wurde (changeCount unverändert).
+    private var earlyCopy: Int?
+    /// „Mit Kontext“, Kontext noch nicht fertig: Video sofort, Text als Versprechen (ScreenRecClip, 19.10.2026)
+    private var clip: ScreenRecClip?
 
     init(url: URL, duration: TimeInterval, screen: String, sound: ScreenRecSound) {
         self.url = url; self.duration = duration; self.screen = screen; self.sound = sound
@@ -549,34 +1008,145 @@ final class ScreenRecDone {
     func changed() { onChange(); tryCopy() }
     func fileReady() { ready = true; changed() }
 
+    /// Abspiel-Prüfung fehlgeschlagen: wartendes Kopieren verwerfen (nie eine kaputte Datei in die Zwischenablage)
+    func markBroken() {
+        broken = true
+        ScreenRecClip.finish(url, context: nil)   // wartendes Einfügen nicht hängen lassen
+        let waited = pendingCopy
+        pendingCopy = nil
+        if waited == .task { APCard.shared.endJob() }
+        if waited != nil || !cardOpen {
+            ScreenRec.shared.pill?.view.showToast("Aufnahme lässt sich nicht abspielen – nichts kopiert", seconds: 4)
+        }
+        onChange()
+    }
+
     /// „Kopieren“ gedrückt – sofort, oder sobald Datei (und ggf. Kontext) fertig sind
     func copyRequested(_ mode: ScreenRecCopy) {
+        guard !broken else {
+            ScreenRec.shared.pill?.view.showToast("Aufnahme lässt sich nicht abspielen – nichts kopiert", seconds: 3); return
+        }
         cardOpen = false
         pendingCopy = mode
-        if !ready || (mode == .withContext && context == nil) {
-            ScreenRec.shared.pill?.view.showToast(ready ? "Bilder/Transkript kommen gleich – kopiere dann …" : "Video wird noch gespeichert – kopiere gleich …", seconds: 2.5)
+        if mode == .task {
+            showTaskCard()
+        } else if !ready {
+            ScreenRec.shared.pill?.view.showToast("Video wird noch gespeichert – kopiere gleich …", seconds: 2.5)
         }
+        if ready && mode == .task { earlyCopy = ScreenRec.shared.copy(url, quiet: true) }
+        if ready && mode == .withContext && context == nil { promiseCopy() }
         tryCopy()
+    }
+
+    /// Video sofort in die Zwischenablage, der Text (Pfad + Kontext) als Versprechen: ⌘V wartet notfalls auf den Kontext
+    private func promiseCopy() {
+        let c = ScreenRecClip(url: url)
+        c.onWait = { ScreenRec.shared.pill?.view.showToast("Moment – Transkript kommt mit …", seconds: 2.5) }
+        c.write()
+        clip = c
+        ScreenRec.shared.pill?.view.showToast("Kopiert – ⌘V fügt Video + Kontext ein", seconds: 2.5)
+        log("Bildschirmaufnahme kopiert (Video sofort, Kontext als Versprechen): \(url.lastPathComponent)")
     }
 
     private func tryCopy() {
         guard let m = pendingCopy, ready else { return }
-        if m == .withContext && context == nil { return }
+        if m == .withContext && context == nil && clip == nil { promiseCopy() }   // Datei wurde gerade fertig
+        if m == .task && earlyCopy == nil { earlyCopy = ScreenRec.shared.copy(url, quiet: true) }
+        if (m == .withContext || m == .task) && context == nil { return }
+        if m == .withContext, let c = clip {
+            pendingCopy = nil
+            // Wird gerade eingefügt: das Versprechen liefert gleich Pfad + Kontext – jetzt nichts drüberschreiben
+            if c.isProviding { return }
+            if c.pasteboard.changeCount == c.changeCount {
+                // noch unsere Zwischenablage: Kontext fest hineinlegen (hält auch, wenn Flow vor dem Einfügen beendet wird)
+                ScreenRec.shared.copy(url, context: context)
+            } else {
+                log("Bildschirmaufnahme: Kontext fertig, Zwischenablage inzwischen anders belegt" + (c.delivered ? " (vorher mit Kontext eingefügt)" : ""))
+            }
+            return
+        }
+        if m == .task {
+            guard let t = task else {
+                if !taskRunning, let ctx = context {
+                    taskRunning = true
+                    let url = self.url
+                    Task { @MainActor in
+                        let t0 = Date()
+                        self.task = await ScreenRecTask.build(video: url, context: ctx)
+                        let secs = Date().timeIntervalSince(t0)
+                        log("Bildschirmaufnahme: Auftrag gebaut in \(String(format: "%.1f", secs)) s")
+                        ScreenRecDone.learnTaskSeconds(secs)
+                        self.taskRunning = false
+                        self.tryCopy()
+                    }
+                }
+                return
+            }
+            pendingCopy = nil
+            APCard.shared.endJob()
+            if let cc = earlyCopy, NSPasteboard.general.changeCount != cc {
+                // inzwischen etwas anderes kopiert/diktiert: Auftrag nicht drüberlegen, aber anbieten
+                ScreenRec.shared.copyLater(url, task: t)
+                return
+            }
+            ScreenRec.shared.copy(url, context: t, isTask: true)
+            return
+        }
         pendingCopy = nil
         ScreenRec.shared.copy(url, context: m == .withContext ? context : nil)
+    }
+
+    // MARK: „Als Auftrag“: Karte wie beim Agent-Prompt, mit Restzeit
+
+    private var taskStarted = Date()
+
+    /// geschätzte Dauer Klick → Auftrag fertig: Kontext (falls noch nicht da) + gelernte KI-Dauer
+    private func taskExpected() -> Double {
+        let ctx = context == nil ? max(2, duration / 40) : 0
+        return ctx + Self.taskSeconds()
+    }
+
+    static func taskSeconds() -> Double {
+        let v = UserDefaults.standard.double(forKey: "screenRecTaskSecs")
+        return v > 3 ? v : 20
+    }
+    static func learnTaskSeconds(_ s: Double) {
+        guard s > 1, s < 120 else { return }
+        let old = UserDefaults.standard.double(forKey: "screenRecTaskSecs")
+        UserDefaults.standard.set(old > 3 ? old * 0.6 + s * 0.4 : s, forKey: "screenRecTaskSecs")
+    }
+
+    private func showTaskCard() {
+        taskStarted = Date()
+        let job = APCardJob(chip: "Auftrag", title: "Auftrag wird mit KI gebaut …",
+                            line: "Claude liest Video, Bilder\(sound.transcribes ? ", Transkript" : "") und Mausspuren und schreibt den Auftrag.",
+                            expected: taskExpected(), note: "Video liegt schon in der Zwischenablage")
+        let shown = APCard.shared.showJob(job, started: taskStarted) { [weak self] a in
+            guard let self, a == .cancel || a == .close else { return }
+            guard self.pendingCopy == .task else { return }
+            self.pendingCopy = nil
+            log("Bildschirmaufnahme: Auftrag abgebrochen")
+            ScreenRec.shared.pill?.view.showToast("Auftrag abgebrochen – Video liegt in der Zwischenablage", seconds: 2.5)
+        }
+        if !shown { ScreenRec.shared.pill?.view.showToast("Auftrag für den Agent wird gebaut … (~\(Int(job.expected)) s)", seconds: 3) }
     }
 
     /// Transkript (nur Mikrofon) + Schlüsselbilder → ein Text für Agents
     func buildContext() {
         let url = self.url, dur = self.duration, clicks = self.clicks, sound = self.sound, screen = self.screen
-        let mouse = self.mouse, sf = self.screenFrame
+        let mouse = self.mouse, infos = self.clickInfos, marks = self.marks, boxes = self.markBoxes
+        let sw = switches.isEmpty ? [ScreenRecSwitch(t: 0, frame: screenFrame, name: screen)] : switches
         Task.detached(priority: .userInitiated) {
             let t0 = Date()
-            let segs = sound == .mic ? (await ScreenRecTranscript.segments(url) ?? []) : []
-            let times = ScreenRecKeyframes.times(duration: dur, clicks: clicks, speech: segs.map(\.start))
-            let frames = await ScreenRecKeyframes.extract(url, at: times, clicks: clicks)
-            let trails = await ScreenRecTrails.render(url, mouse: mouse, screen: sf)
-            let text = ScreenRecKeyframes.compose(duration: dur, screen: screen, sound: sound, segments: segs, frames: frames, trails: trails)
+            let segs = sound.transcribes ? (await ScreenRecTranscript.segments(url) ?? []) : []
+            let markEnds = marks.compactMap { $0.last }
+            let times = ScreenRecKeyframes.times(duration: dur, clicks: clicks, speech: segs.map(\.start), marks: markEnds)
+            let frames = await ScreenRecKeyframes.extract(url, at: times, clicks: clicks, marks: markEnds)
+            let trails = await ScreenRecTrails.render(url, mouse: mouse, screens: sw)
+            let crops = await ScreenRecMarks.crops(url, marks: marks, boxes: boxes, switches: sw)
+            let text = ScreenRecKeyframes.compose(duration: dur, screen: screen, sound: sound, segments: segs, frames: frames, trails: trails,
+                                                  clicks: infos, marks: marks, switches: sw, markCrops: crops)
+            ScreenRecClip.finish(url, context: text)   // wartendes ⌘V sofort beliefern – ohne Umweg über den Hauptfaden
             await MainActor.run {
                 self.trails = trails
                 self.keyframes = frames
@@ -645,6 +1215,7 @@ struct ScreenRecKeyframe: Equatable {
     let time: Double
     let url: URL
     let click: Bool
+    var mark = false
 }
 
 enum ScreenRecKeyframes {
@@ -657,12 +1228,13 @@ enum ScreenRecKeyframes {
 
     /// Zeitpunkte: kurz nach jedem Klick (Ergebnis sichtbar), Anfang jedes Satzes, Anfang und Ende; dicht beieinander
     /// liegende fallen zusammen (Klick gewinnt), höchstens maxFrames (gleichmäßig ausgedünnt)
-    static func times(duration: Double, clicks: [Double], speech: [Double]) -> [Double] {
+    static func times(duration: Double, clicks: [Double], speech: [Double], marks: [Double] = []) -> [Double] {
         guard duration > 0.3 else { return [] }
         let end = max(0.2, duration - 0.3)
         var cands: [(t: Double, prio: Int)] = [(min(0.5, end), 1), (end, 1)]
         cands += clicks.map { (min(end, $0 + 0.35), 3) }
         cands += speech.map { (min(end, $0 + 0.2), 2) }
+        cands += marks.map { (min(end, $0 + 0.1), 4) }   // Markierung: kurz nach dem Loslassen, Linie noch voll sichtbar
         cands.sort { $0.t < $1.t }
         var picked: [(t: Double, prio: Int)] = []
         for c in cands {
@@ -678,7 +1250,7 @@ enum ScreenRecKeyframes {
     }
 
     /// Ordner neben dem Video: „<Video> – Bilder/0m12s.jpg“, lange Seite 1600 px (lesbar, nicht riesig)
-    static func extract(_ url: URL, at times: [Double], clicks: [Double]) async -> [ScreenRecKeyframe] {
+    static func extract(_ url: URL, at times: [Double], clicks: [Double], marks: [Double] = []) async -> [ScreenRecKeyframe] {
         guard !times.isEmpty else { return [] }
         let folder = URL(fileURLWithPath: url.deletingPathExtension().path + " – Bilder", isDirectory: true)
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -694,27 +1266,118 @@ enum ScreenRecKeyframes {
             let f = folder.appendingPathComponent("\(s / 60)m\(String(format: "%02d", s % 60))s.jpg")
             guard let data = NSBitmapImageRep(cgImage: img).representation(using: .jpeg, properties: [.compressionFactor: 0.82]),
                   (try? data.write(to: f)) != nil else { continue }
-            out.append(ScreenRecKeyframe(time: t, url: f, click: clicks.contains { abs(($0 + 0.35) - t) < 0.4 }))
+            out.append(ScreenRecKeyframe(time: t, url: f, click: clicks.contains { abs(($0 + 0.35) - t) < 0.4 },
+                                         mark: marks.contains { abs(($0 + 0.1) - t) < 0.3 }))
         }
         return out
     }
 
     /// Text für den Agent: Sätze und Bilder in zeitlicher Reihenfolge
     static func compose(duration: Double, screen: String, sound: ScreenRecSound, segments: [ScreenRecTranscript.Segment],
-                        frames: [ScreenRecKeyframe], trails: [ScreenRecTrail] = []) -> String {
+                        frames: [ScreenRecKeyframe], trails: [ScreenRecTrail] = [],
+                        clicks: [ScreenRecClickInfo] = [], marks: [[Double]] = [], switches: [ScreenRecSwitch] = [],
+                        markCrops: [Int: URL] = [:]) -> String {
         var rows: [(t: Double, order: Int, line: String)] = []
-        for tr in trails { rows.append((tr.start, 2, "[\(stamp(tr.start))–\(stamp(tr.end))] Mausspur (grün = Anfang, rot = Ende): \(tr.url.path)")) }
+        for w in switches.dropFirst() { rows.append((w.t, 0, "[\(stamp(w.t))] Video wechselt auf: \(w.name)")) }
+        for c in clicks { rows.append((c.t, 1, "[\(stamp(c.t))] \(c.text)")) }
+        // Markierung: Ausschnitt des markierten Bereichs + was dabei gesagt wurde (18.10.2026, Wunsch: „1 und 4“)
+        for (i, m) in marks.enumerated() where m.count == 2 {
+            var line = "[\(stamp(m[0]))–\(stamp(m[1]))] Rot eingezeichnet (Markierung)"
+            if let c = markCrops[i] { line += " – Ausschnitt: \(c.path)" }
+            if let said = ScreenRecMarks.said(segments, start: m[0], end: m[1]) { line += "\n    dazu gesagt: „\(said)“" }
+            rows.append((m[0], 1, line))
+        }
+        for tr in trails { rows.append((tr.start, 3, "[\(stamp(tr.start))–\(stamp(tr.end))] Mausspur (grün = Anfang, rot = Ende): \(tr.url.path)")) }
         for s in segments { rows.append((s.start, 0, "[\(stamp(s.start))] \(s.text)")) }
-        for f in frames { rows.append((f.time, 1, "[\(stamp(f.time))] Bild\(f.click ? " (nach Klick)" : ""): \(f.url.path)")) }
+        for f in frames { rows.append((f.time, 2, "[\(stamp(f.time))] Bild\(f.mark ? " (mit Markierung)" : f.click ? " (nach Klick)" : ""): \(f.url.path)")) }
         rows.sort { $0.t != $1.t ? $0.t < $1.t : $0.order < $1.order }
-        let what = sound == .mic ? "was ich sage und was dabei zu sehen ist" : "was dabei zu sehen ist"
+        let what = sound == .mic ? "was ich sage und was dabei zu sehen ist"
+            : sound == .system ? "was zu hören (Systemton) und zu sehen ist" : "was dabei zu sehen ist"
         var head = "Bildschirmaufnahme (\(stamp(duration)), \(screen)) – \(what):"
-        if sound == .mic && segments.isEmpty { head += "\n(kein gesprochener Text erkannt)" }
+        if sound.transcribes && segments.isEmpty { head += "\n(kein gesprochener Text erkannt)" }
         return ([head] + rows.map(\.line)).joined(separator: "\n")
     }
 }
 
-// MARK: - Mausspur: was du mit der Maus zeigst, einkreist oder schreibst
+// MARK: - Markierung auswerten (18.10.2026): Ausschnitt + was dabei gesagt wurde
+//
+// Der rote Kreis im Vollbild ist für eine KI klein und leicht zu übersehen. Darum: der markierte Bereich als eigenes,
+// scharfes Bild („Markierung 0m13s.jpg“, aus dem vollen Videobild kurz nach dem Loslassen, Linie noch sichtbar) und
+// im Kontext direkt darunter die Sätze, die beim Zeichnen gesagt wurden („Genau diesen Bereich“).
+
+enum ScreenRecMarks {
+    static let padFactor: CGFloat = 0.25
+    static let minPad: CGFloat = 60
+    static let minSize = CGSize(width: 480, height: 300)
+    static let maxSide: CGFloat = 1600
+
+    /// Rahmen der Linie (Bildschirm-Punkte, Cocoa) → Pixel-Rechteck im Videobild (Ursprung oben links) mit Rand
+    static func rect(_ box: NSRect, screen: NSRect, W: CGFloat, H: CGFloat) -> CGRect? {
+        guard screen.width > 0, box.width >= 0 else { return nil }
+        let a = ScreenRecTrails.map(NSPoint(x: box.minX, y: box.minY), screen: screen, W: W, H: H)
+        let b = ScreenRecTrails.map(NSPoint(x: box.maxX, y: box.maxY), screen: screen, W: W, H: H)
+        var r = CGRect(x: a.x, y: H - b.y, width: b.x - a.x, height: b.y - a.y)
+        let pad = max(minPad, padFactor * max(r.width, r.height))
+        r = r.insetBy(dx: -pad, dy: -pad)
+        if r.width < minSize.width { r = r.insetBy(dx: -(minSize.width - r.width) / 2, dy: 0) }
+        if r.height < minSize.height { r = r.insetBy(dx: 0, dy: -(minSize.height - r.height) / 2) }
+        r = r.intersection(CGRect(x: 0, y: 0, width: W, height: H)).integral
+        return r.width > 20 && r.height > 20 ? r : nil
+    }
+
+    /// Je Markierung ein Ausschnitt-Bild neben den Schlüsselbildern; Schlüssel = Index in `marks`
+    static func crops(_ url: URL, marks: [[Double]], boxes: [NSRect], switches sw: [ScreenRecSwitch]) async -> [Int: URL] {
+        guard !boxes.isEmpty, !marks.isEmpty else { return [:] }
+        let folder = URL(fileURLWithPath: url.deletingPathExtension().path + " – Bilder", isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let gen = AVAssetImageGenerator(asset: AVURLAsset(url: url))
+        gen.appliesPreferredTrackTransform = true
+        gen.requestedTimeToleranceBefore = CMTime(seconds: 0.1, preferredTimescale: 600)
+        gen.requestedTimeToleranceAfter = CMTime(seconds: 0.1, preferredTimescale: 600)
+        var out: [Int: URL] = [:]
+        for (i, m) in marks.enumerated() where i < boxes.count && m.count == 2 {
+            guard let (img, _) = try? await gen.image(at: CMTime(seconds: m[1] + 0.1, preferredTimescale: 600)),
+                  let r = rect(boxes[i], screen: ScreenRecTrails.frame(at: m[0], sw), W: CGFloat(img.width), H: CGFloat(img.height)),
+                  let cut = img.cropping(to: r), let small = shrink(cut),
+                  let data = NSBitmapImageRep(cgImage: small).representation(using: .jpeg, properties: [.compressionFactor: 0.88])
+            else { continue }
+            let s = Int(m[0])
+            var f = folder.appendingPathComponent("Markierung \(s / 60)m\(String(format: "%02d", s % 60))s.jpg")
+            if out.values.contains(f) { f = folder.appendingPathComponent("Markierung \(s / 60)m\(String(format: "%02d", s % 60))s-\(i + 1).jpg") }
+            if (try? data.write(to: f)) != nil { out[i] = f }
+        }
+        return out
+    }
+
+    /// Lange Seite höchstens 1600 px (Ausschnitt bleibt scharf, Datei klein)
+    static func shrink(_ img: CGImage) -> CGImage? {
+        let k = min(1, maxSide / CGFloat(max(img.width, img.height)))
+        guard k < 1 else { return img }
+        let w = Int(CGFloat(img.width) * k), h = Int(CGFloat(img.height) * k)
+        guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        ctx.interpolationQuality = .high
+        ctx.draw(img, in: CGRect(x: 0, y: 0, width: w, height: h))
+        return ctx.makeImage()
+    }
+
+    /// Was beim Zeichnen gesagt wurde: Sätze, die bis 3 s vorher oder 2,5 s nachher beginnen oder beim Ansetzen
+    /// noch laufen (höchstens 320 Zeichen)
+    static func said(_ segs: [ScreenRecTranscript.Segment], start: Double, end: Double) -> String? {
+        var hits: [String] = []
+        for (k, s) in segs.enumerated() {
+            let sEnd = min(s.start + 8, k + 1 < segs.count ? segs[k + 1].start : s.start + 6)
+            let begins = s.start >= start - 3 && s.start <= end + 2.5
+            let running = s.start < start && sEnd > start
+            if begins || running { hits.append(s.text) }
+        }
+        guard !hits.isEmpty else { return nil }
+        let t = hits.joined(separator: " ")
+        return t.count > 320 ? String(t.prefix(318)) + "…" : t
+    }
+}
+
+// MARK: - Mausspur: was du mit der Maus zeigst, einkreist oder schreibst (15.10.2026)
 //
 // Ein Standbild zeigt nur, wo die Maus gerade IST. Wer mit der Maus etwas einkreist oder ein Wort „schreibt“, braucht
 // die Spur – geteilt an den Pausen der Maus (feste Zeitfenster schnitten mitten durch Buchstaben). Flow schreibt die
@@ -722,6 +1385,7 @@ enum ScreenRecKeyframes {
 // des Moments: grün = Anfang, rot = Ende.
 
 struct ScreenRecMouse: Equatable { let t: Double; let x: Double; let y: Double }
+struct ScreenRecSwitch: Equatable { let t: Double; let frame: NSRect; let name: String }
 struct ScreenRecTrail: Equatable { let start: Double; let end: Double; let url: URL }
 
 enum ScreenRecTrails {
@@ -776,8 +1440,24 @@ enum ScreenRecTrails {
 
     /// Jeder Strich auf dem Video-Bild am Ende des Strichs (abgedunkelt), JPEG neben den Schlüsselbildern
     static func render(_ url: URL, mouse m: [ScreenRecMouse], screen: NSRect) async -> [ScreenRecTrail] {
+        await render(url, mouse: m, screens: [ScreenRecSwitch(t: 0, frame: screen, name: "")])
+    }
+
+    /// Welcher Bildschirm war zur Zeit t im Video?
+    static func frame(at t: Double, _ sw: [ScreenRecSwitch]) -> NSRect {
+        sw.last(where: { $0.t <= t })?.frame ?? sw.first?.frame ?? .zero
+    }
+
+    /// Bildschirm-Punkt → Videobild (W×H), eingepasst mit erhaltenem Seitenverhältnis (wie preservesAspectRatio)
+    static func map(_ p: NSPoint, screen: NSRect, W: CGFloat, H: CGFloat) -> NSPoint {
+        let k = min(W / screen.width, H / screen.height)
+        let ox = (W - screen.width * k) / 2, oy = (H - screen.height * k) / 2
+        return NSPoint(x: ox + (p.x - screen.minX) * k, y: oy + (p.y - screen.minY) * k)
+    }
+
+    static func render(_ url: URL, mouse m: [ScreenRecMouse], screens sw: [ScreenRecSwitch]) async -> [ScreenRecTrail] {
         let rs = strokes(m)
-        guard !rs.isEmpty, screen.width > 0 else { return [] }
+        guard !rs.isEmpty, (sw.first?.frame.width ?? 0) > 0 else { return [] }
         let folder = URL(fileURLWithPath: url.deletingPathExtension().path + " – Bilder", isDirectory: true)
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let gen = AVAssetImageGenerator(asset: AVURLAsset(url: url))
@@ -788,11 +1468,14 @@ enum ScreenRecTrails {
             let a = m[r.lowerBound].t, b = m[r.upperBound - 1].t
             guard let (bg, _) = try? await gen.image(at: CMTime(seconds: b, preferredTimescale: 600)) else { continue }
             let W = CGFloat(bg.width), H = CGFloat(bg.height)
-            let sx = W / screen.width, sy = H / screen.height
+            let screen = frame(at: b, sw)
             let img = NSImage(size: NSSize(width: W, height: H), flipped: false) { rect in
                 NSImage(cgImage: bg, size: rect.size).draw(in: rect)
                 NSColor.black.withAlphaComponent(0.55).setFill(); rect.fill(using: .sourceAtop)
-                let pts = m[r].map { NSPoint(x: ($0.x - screen.minX) * sx, y: ($0.y - screen.minY) * sy) }
+                // nur der Teil des Strichs, der auf dem Bildschirm lag, der da im Video war
+                let pts = m[r].filter { NSMouseInRect(NSPoint(x: $0.x, y: $0.y), screen.insetBy(dx: -2, dy: -2), false) }
+                    .map { map(NSPoint(x: $0.x, y: $0.y), screen: screen, W: W, H: H) }
+                guard pts.count > 1 else { return true }
                 for k in 1..<pts.count {
                     let f = CGFloat(k) / CGFloat(pts.count)
                     NSColor(calibratedRed: 0.25 + 0.75 * f, green: 0.85 - 0.6 * f, blue: 0.35 - 0.15 * f, alpha: 1).setStroke()
@@ -958,9 +1641,14 @@ enum ScreenRecDev {
         guard args.count >= 2 else { return nil }
         switch args[1] {
         case "--screen-rec-test": return test()
+        case "--screen-rec-clip-read":   // nur für den Selbsttest: liest eine Test-Zwischenablage wie eine fremde App beim Einfügen
+            let pb = NSPasteboard(name: NSPasteboard.Name(args.count > 2 ? args[2] : "app.flowdictation.flowtest.none"))
+            print(pb.string(forType: .string) ?? "<nichts>")
+            return 0
         case "--screen-rec-render": return render(dir: args.count > 2 ? args[2] : NSTemporaryDirectory() + "aufnahme")
         case "--screen-rec-trail-demo": return trailDemo(args.count > 2 ? args[2] : "")
-        case "--screen-rec-context": return contextDemo(args.count > 2 ? args[2] : "", sound: args.count > 3 && args[3] == "system" ? .system : .mic)
+        case "--screen-rec-context": return contextDemo(args.count > 2 ? args[2] : "", sound: args.count > 3 && args[3] == "system" ? .system : args.count > 3 && args[3] == "none" ? .none : .mic)
+        case "--ink-test": return inkTest(args.count > 2 ? args[2] : NSTemporaryDirectory() + "ink.png")
         case "--screen-rec-probe": return probe(args.count > 2 ? args[2] : NSTemporaryDirectory() + "probe.mp4",
                                                  screenName: args.count > 3 && args[3] != "-" ? args[3] : nil, withGlow: args.contains("glow"))
         default: return nil
@@ -978,6 +1666,17 @@ enum ScreenRecDev {
         check(sys.capturesAudio && !sys.captureMicrophone, "Systemton: Ton ja, Mikro nein")
         check(!mic.capturesAudio && mic.captureMicrophone, "Mikrofon: nur Mikro, kein Systemton")
         check(ScreenRecSound.stored("Systemton + Mikro") == .mic && ScreenRecSound.stored(nil) == .system, "alte Ton-Wahl wird übernommen")
+        check(ScreenRecSound.system.transcribes && ScreenRecSound.mic.transcribes && !ScreenRecSound.none.transcribes, "Transkript auch bei Systemton, nicht ohne Ton")
+        // Video folgt der Maus: anderer Bildschirm wird eingepasst (Seitenverhältnis bleibt), Mausspur trifft trotzdem
+        let wide = NSRect(x: 1512, y: 0, width: 1920, height: 1080)
+        let mid = ScreenRecTrails.map(NSPoint(x: wide.midX, y: wide.midY), screen: wide, W: 3024, H: 1964)
+        let corner = ScreenRecTrails.map(NSPoint(x: wide.minX, y: wide.minY), screen: wide, W: 3024, H: 1964)
+        check(abs(mid.x - 1512) < 0.5 && abs(mid.y - 982) < 0.5 && abs(corner.x) < 0.5 && abs(corner.y - 131.5) < 0.5,
+              "Mausspur auf breiterem Bildschirm sitzt richtig (Balken oben/unten)")
+        let sw = [ScreenRecSwitch(t: 0, frame: .zero, name: "A"), ScreenRecSwitch(t: 5, frame: wide, name: "B")]
+        check(ScreenRecTrails.frame(at: 4.9, sw) == .zero && ScreenRecTrails.frame(at: 6, sw) == wide, "richtiger Bildschirm je Zeitpunkt")
+        let swCtx = ScreenRecKeyframes.compose(duration: 10, screen: "2 Bildschirme", sound: .none, segments: [], frames: [], switches: sw)
+        check(swCtx.contains("[0:05] Video wechselt auf: B"), "Bildschirmwechsel steht im Kontext")
         check(sys.excludesCurrentProcessAudio, "eigene Töne (Flow) nicht im Video")
         check(sys.showsCursor && sys.showMouseClicks, "Mauszeiger + Klicks sichtbar")
         check(ScreenRecSound.allCases.map(\.rawValue) == ["Ohne Ton", "Mikrofon", "Systemton"], "drei Ton-Chips in fester Reihenfolge")
@@ -996,12 +1695,48 @@ enum ScreenRecDev {
         check(card.title == "Aufnahme fertig · 1:23", "Titel mit Laufzeit: \(card.title)")
         check(card.primary?.0 == "Kopieren" && card.secondary?.0 == "Nochmal", "Knöpfe Kopieren · Nochmal")
         check(card.text.contains("Externer Monitor") && card.text.contains("Mikrofon") && card.text.contains("gespeichert"), "sofort: Bildschirm, Ton, „wird gespeichert“")
-        check(card.choices == ["Nur Video", "Video + Transkript + Bilder"] && card.preselect == 1, "mit Mikro: Kopier-Wahl, Kontext vorgewählt")
+        check(card.choices == ["Nur Video", "Mit Kontext", "Als Auftrag"] && card.preselect == 1, "Kopier-Wahl: Video · Kontext · Auftrag, Kontext vorgewählt")
         rd.fileReady()
         card = ScreenRec.doneNotice(rd, copy: {}, again: {})
         check(card.text.contains("Transkript und Bilder werden erstellt"), "danach: Kontext läuft")
         let sysD = ScreenRecDone(url: url, duration: 5, screen: "X", sound: .system)
-        check(ScreenRec.doneNotice(sysD, copy: {}, again: {}).choices == ["Nur Video", "Video + Bilder"], "ohne Mikro: Video + Bilder")
+        check(ScreenRec.doneNotice(sysD, copy: {}, again: {}).choices.count == 3, "ohne Mikro: dieselben drei Wahlen")
+        // Klick-Kontext als Text
+        let ci = ScreenRecClickInfo(t: 12.4, label: "Speichern", role: "Taste", app: "Safari", window: "Rechnung März")
+        check(ci.text == "Klick auf „Speichern“ (Taste) · Safari – „Rechnung März“", "Klick-Text: \(ci.text)")
+        check(ScreenRecClickInfo(t: 1, label: nil, role: nil, app: "Finder", window: "Finder").text == "Klick · Finder", "Klick ohne Beschriftung")
+        check(ScreenRecClickProbe.clip(String(repeating: "x", count: 80)).count == 59, "lange Beschriftung gekürzt")
+        // Stift (18.10.): Koordinaten direkt vom System, weiche Kurven statt Ecken
+        let lp = ScreenRecInk.local(CGPoint(x: 1600, y: 100), primaryH: 982, screen: NSRect(x: 1512, y: -200, width: 1920, height: 1080))
+        check(lp == CGPoint(x: 88, y: 1082), "Stift: Position auf dem zweiten Bildschirm richtig umgerechnet (\(lp))")
+        let ring = (0..<60).map { i -> CGPoint in let a = Double(i) / 60 * 2 * .pi; return CGPoint(x: 200 + 100 * cos(a), y: 200 + 100 * sin(a)) }
+        let sp = ScreenRecInk.smooth(ring)
+        var curves = 0, lines = 0
+        sp.applyWithBlock { e in switch e.pointee.type { case .addQuadCurveToPoint: curves += 1; case .addLineToPoint: lines += 1; default: break } }
+        check(curves == 58 && lines == 1, "Stift: Kreis wird aus Kurven gebaut (\(curves) Kurven, \(lines) Linie)")
+        let bb = sp.boundingBoxOfPath
+        check(abs(bb.width - 200) < 4 && abs(bb.height - 200) < 4, "Stift: geglätteter Kreis behält seine Größe (\(Int(bb.width))×\(Int(bb.height)))")
+        check(ScreenRecInk.hz >= 120, "Stift tastet ≥ 120×/s ab")
+        // Markierung auswerten (18.10.): Ausschnitt-Rechteck + was dabei gesagt wurde
+        let mr = ScreenRecMarks.rect(NSRect(x: 100, y: 800, width: 200, height: 100), screen: NSRect(x: 0, y: 0, width: 1512, height: 982), W: 3024, H: 1964)
+        check(mr == CGRect(x: 100, y: 64, width: 600, height: 400), "Markierung: Ausschnitt um die Linie mit Rand, oben-links-Pixel (\(String(describing: mr)))")
+        let edge = ScreenRecMarks.rect(NSRect(x: 0, y: 0, width: 10, height: 10), screen: NSRect(x: 0, y: 0, width: 1512, height: 982), W: 3024, H: 1964)
+        check(edge.map { $0.minX >= 0 && $0.maxY <= 1964 && $0.width >= 240 } == true, "Markierung am Rand: Ausschnitt bleibt im Bild (\(String(describing: edge)))")
+        let segsM = [ScreenRecTranscript.Segment(start: 5, text: "Das hier finde ich cool."), ScreenRecTranscript.Segment(start: 12, text: "Komisch."),
+                     ScreenRecTranscript.Segment(start: 15, text: "Genau diesen Bereich."), ScreenRecTranscript.Segment(start: 21, text: "Anderes Thema.")]
+        let saidM = ScreenRecMarks.said(segsM, start: 13.2, end: 17.0) ?? ""
+        check(saidM == "Komisch. Genau diesen Bereich.", "Markierung: Sätze beim Zeichnen gefunden (\(saidM))")
+        let ctxM = ScreenRecKeyframes.compose(duration: 30, screen: "Test", sound: .mic, segments: segsM, frames: [], marks: [[13.2, 17.0]],
+                                              markCrops: [0: URL(fileURLWithPath: "/tmp/Markierung 0m13s.jpg")])
+        check(ctxM.contains("[0:13–0:17] Rot eingezeichnet (Markierung) – Ausschnitt: /tmp/Markierung 0m13s.jpg\n    dazu gesagt: „Komisch. Genau diesen Bereich.“"),
+              "Markierung im Kontext: Ausschnitt + dazu gesagt")
+        // Markierung → Bild mit höchster Priorität
+        let tm = ScreenRecKeyframes.times(duration: 30, clicks: [10], speech: [11], marks: [11.5])
+        check(tm.contains(11.6) && !tm.contains(10.35), "Bild nach Markierung schlägt Klick daneben: \(tm)")
+        let ctx3 = ScreenRecKeyframes.compose(duration: 20, screen: "X", sound: .system, segments: [], frames: [],
+                                              clicks: [ci], marks: [[14, 16]])
+        check(ctx3.contains("[0:12] Klick auf „Speichern“") && ctx3.contains("[0:14–0:16] Rot eingezeichnet"), "Klicks + Markierungen im Kontext")
+        check(ScreenRecTask.fallback(video: url, context: "K").contains("Video: \(url.path)"), "Auftrag ohne Claude: Vorlage mit Video-Pfad")
         let words: ScreenRecTranscript.Words = [("Hallo", 0.2, 0.5), ("zusammen.", 0.6, 1.0), ("Hier", 1.3, 1.5), ("klicke", 1.6, 1.9),
                                                 ("ich", 2.0, 2.1), ("dann", 4.0, 4.2), ("weiter", 4.3, 4.6)]
         let sents = ScreenRecTranscript.sentences(words, offset: 30)
@@ -1034,6 +1769,11 @@ enum ScreenRecDev {
         // Pille: Umfang der Kapsel (für den kreisenden Lichtschweif)
         let per = PillView.perimeter(NSRect(x: 0, y: 0, width: 118, height: 26))
         check(abs(per - (2 * 92 + .pi * 26)) < 0.01, "Kapsel-Umfang \(per)")
+        clipTest(check)
+        // Abbau (19.10.2026): laufende Aufnahme NUR stoppen – Ausgabe abhängen + stoppen ließ replayd bei jedem Stopp abstürzen
+        check(ScreenRec.teardownSteps(captureStarted: true, hasOutput: true) == [.stopCapture], "Stopp einer laufenden Aufnahme: nur stopCapture (kein doppelter Abschluss)")
+        check(ScreenRec.teardownSteps(captureStarted: false, hasOutput: true) == [.detachOutput, .stopCapture], "Fehlstart: Ausgabe abhängen, dann stoppen (kein Geist)")
+        check(ScreenRec.teardownSteps(captureStarted: false, hasOutput: false) == [.stopCapture], "Fehlstart ohne Ausgabe: nur stoppen")
         print("\(n - fails)/\(n) Prüfungen bestanden – Bildschirmaufnahme")
         return fails == 0 ? 0 : 1
     }
@@ -1088,6 +1828,77 @@ enum ScreenRecDev {
         return rc
     }
 
+    /// „Mit Kontext“ als Versprechen (19.10.2026): ⌘V vor dem fertigen Kontext bekommt trotzdem Pfad + Kontext.
+    /// Nur eigene Test-Zwischenablagen – die echte Zwischenablage wird nie angefasst.
+    static func clipTest(_ check: (Bool, String) -> Void) {
+        _ = NSApplication.shared
+        let tmp = FileManager.default.temporaryDirectory
+        func board() -> NSPasteboard { NSPasteboard(name: NSPasteboard.Name("app.flowdictation.flowtest.screenrec-\(UUID().uuidString)")) }
+        func video() -> URL { tmp.appendingPathComponent("Test Aufnahme \(UUID().uuidString.prefix(6)).mp4") }
+        func later(_ s: Double, _ url: URL, _ ctx: String?) {
+            DispatchQueue.global().asyncAfter(deadline: .now() + s) { ScreenRecClip.finish(url, context: ctx) }
+        }
+        // 1) Einfügen in Flow selbst, Kontext kommt 0,4 s später → wartet und bekommt alles
+        do {
+            let pb = board(), u = video(), c = ScreenRecClip(url: u, pasteboard: pb)
+            c.write(); later(0.4, u, "[0:01] Das hier ist kaputt.")
+            let t0 = Date(); let s = pb.string(forType: .string) ?? ""; let dt = Date().timeIntervalSince(t0)
+            check(s.contains("Das hier ist kaputt.") && s.hasPrefix(CVPickSet.shellEscape(u.path)) && dt > 0.3,
+                  String(format: "Versprechen: ⌘V wartet auf den Kontext (%.2f s) und bekommt Pfad + Gesagtes", dt))
+            check(pb.readObjects(forClasses: [NSURL.self], options: nil)?.first as? URL == u, "Versprechen: Datei liegt sofort drin")
+            check(!c.isPending && c.delivered, "Versprechen: nach dem Einfügen erfüllt")
+            pb.releaseGlobally()
+        }
+        // 2) Wie im echten Fall: fremde App fügt sofort ein (eigener Prozess), Kontext kommt 1 s später
+        if let exe = Bundle.main.executablePath {
+            let pb = board(), u = video(), c = ScreenRecClip(url: u, pasteboard: pb)
+            c.write(); later(1.0, u, "[0:02] Genau diesen Knopf meine ich.")
+            let p = Process(), out = Pipe()
+            p.executableURL = URL(fileURLWithPath: exe); p.arguments = ["--screen-rec-clip-read", pb.name.rawValue]; p.standardOutput = out
+            let t0 = Date()
+            var s = ""
+            if (try? p.run()) != nil {
+                while p.isRunning && Date().timeIntervalSince(t0) < 20 { RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.02)) }
+                s = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            }
+            check(s.contains("Genau diesen Knopf meine ich.") && s.hasPrefix(CVPickSet.shellEscape(u.path)),
+                  String(format: "Versprechen: andere App fügt sofort ein → wartet %.1f s, bekommt Pfad + Gesagtes", Date().timeIntervalSince(t0)))
+            pb.releaseGlobally()
+        }
+        // 3) Kontext schon fertig → sofort
+        do {
+            let pb = board(), u = video(), c = ScreenRecClip(url: u, pasteboard: pb)
+            ScreenRecClip.finish(u, context: "[0:00] Fertig."); c.write()
+            let t0 = Date(); let s = pb.string(forType: .string) ?? ""
+            check(s.hasSuffix("[0:00] Fertig.") && Date().timeIntervalSince(t0) < 0.2, "Versprechen: fertiger Kontext kommt ohne Warten")
+            pb.releaseGlobally()
+        }
+        // 4) Kontext wird nie fertig → nach waitLimit Pfad + ehrlicher Hinweis (kein Hängen)
+        do {
+            let keep = ScreenRecClip.waitLimit; ScreenRecClip.waitLimit = 0.3
+            let pb = board(), u = video(), c = ScreenRecClip(url: u, pasteboard: pb)
+            c.write()
+            let t0 = Date(); let s = pb.string(forType: .string) ?? ""; let dt = Date().timeIntervalSince(t0)
+            check(s.hasPrefix(CVPickSet.shellEscape(u.path)) && s.contains("noch nicht fertig") && dt < 1.5, String(format: "Versprechen: Höchstwartezeit greift (%.2f s)", dt))
+            ScreenRecClip.waitLimit = keep
+            pb.releaseGlobally()
+        }
+        // 5) Diktat/Befehlsmodus sichert die Zwischenablage: wartet NICHT, legt danach das Versprechen zurück
+        do {
+            let pb = board(), u = video(), c = ScreenRecClip(url: u, pasteboard: pb)
+            c.write()
+            let t0 = Date(); let snap = CommandMode.snapshot(pb); let dt = Date().timeIntervalSince(t0)
+            check(dt < 0.1 && snap.count == 1 && snap[0][ScreenRecClip.markerType] != nil, String(format: "Sichern beim Diktat wartet nicht auf den Kontext (%.3f s)", dt))
+            pb.clearContents(); pb.setString("diktierter Text", forType: .string)
+            CommandMode.restore(snap, into: pb)
+            later(0.2, u, "[0:03] Zurückgelegt.")
+            let s = pb.string(forType: .string) ?? ""
+            check(s.contains("Zurückgelegt.") && (pb.readObjects(forClasses: [NSURL.self], options: nil)?.first as? URL) == u,
+                  "Nach dem Diktat liegt wieder Video + Kontext in der Zwischenablage")
+            pb.releaseGlobally()
+        }
+    }
+
     /// Kontext (Transkript + Schlüsselbilder) für ein vorhandenes Video bauen und ausgeben – Bilder landen neben dem Video
     static func contextDemo(_ path: String, sound: ScreenRecSound) -> Int32 {
         _ = NSApplication.shared
@@ -1098,16 +1909,66 @@ enum ScreenRecDev {
         Task {
             let dur = (try? await AVURLAsset(url: url).load(.duration).seconds) ?? 0
             let t0 = Date()
-            let segs = sound == .mic ? (await ScreenRecTranscript.segments(url) ?? []) : []
-            let times = ScreenRecKeyframes.times(duration: dur, clicks: [], speech: segs.map(\.start))
-            let frames = await ScreenRecKeyframes.extract(url, at: times, clicks: [])
-            print(ScreenRecKeyframes.compose(duration: dur, screen: "Test", sound: sound, segments: segs, frames: frames))
+            let segs = sound.transcribes ? (await ScreenRecTranscript.segments(url) ?? []) : []
+            // mark=Start,Ende,x,y,b,h (Bildschirm-Punkte, Ursprung unten links; Bildschirm = Videogröße in Punkten)
+            var marks: [[Double]] = [], boxes: [NSRect] = []
+            for a in CommandLine.arguments where a.hasPrefix("mark=") {
+                let v = a.dropFirst(5).split(separator: ",").compactMap { Double($0) }
+                if v.count == 6 { marks.append([v[0], v[1]]); boxes.append(NSRect(x: v[2], y: v[3], width: v[4], height: v[5])) }
+            }
+            let tr = try? await AVURLAsset(url: url).loadTracks(withMediaType: .video).first
+            let px = (try? await tr?.load(.naturalSize)) ?? .zero
+            let sw = [ScreenRecSwitch(t: 0, frame: NSRect(x: 0, y: 0, width: px.width / 2, height: px.height / 2), name: "Test")]
+            let times = ScreenRecKeyframes.times(duration: dur, clicks: [], speech: segs.map(\.start), marks: marks.compactMap(\.last))
+            let frames = await ScreenRecKeyframes.extract(url, at: times, clicks: [], marks: marks.compactMap(\.last))
+            let crops = await ScreenRecMarks.crops(url, marks: marks, boxes: boxes, switches: sw)
+            print(ScreenRecKeyframes.compose(duration: dur, screen: "Test", sound: sound, segments: segs, frames: frames,
+                                             marks: marks, switches: sw, markCrops: crops))
             print(String(format: "– %.1f s", Date().timeIntervalSince(t0)))
             rc = frames.isEmpty ? 1 : 0
             sem.signal()
         }
         while sem.wait(timeout: .now() + 0.05) == .timedOut { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
         return rc
+    }
+
+    /// Stift ohne Aufnahme: Kreis zeichnen (Main-Thread hängt zweimal 0,5 s), Stift-Fenster abfotografieren, Rot zählen
+    static func inkTest(_ path: String) -> Int32 {
+        _ = NSApplication.shared
+        guard CGPreflightScreenCaptureAccess() else { print("Keine Freigabe Bildschirmaufnahme"); return 3 }
+        let screen = ScreenRec.screenUnderMouse()
+        let ink = ScreenRecInk(); ink.prepare(on: screen)
+        let c = CGPoint(x: (screen?.frame.width ?? 1000) / 2, y: (screen?.frame.height ?? 800) / 2)
+        let ring = (0...180).map { i -> CGPoint in let a = Double(i) / 180 * 2 * .pi; return CGPoint(x: c.x + 220 * cos(a), y: c.y + 160 * sin(a)) }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        ink.simulate(ring, every: 1.0 / 120)
+        var shots: [(Double, Int)] = []
+        let t0 = Date()
+        func shoot() {
+            let sem = DispatchSemaphore(value: 0)
+            Task {
+                defer { sem.signal() }
+                guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false),
+                      let w = content.windows.first(where: { $0.windowID == CGWindowID(ink.windowNumber) }) else { return }
+                let cfg = SCStreamConfiguration(); cfg.width = Int(w.frame.width); cfg.height = Int(w.frame.height)
+                guard let img = try? await SCScreenshotManager.captureImage(contentFilter: SCContentFilter(desktopIndependentWindow: w), configuration: cfg) else { return }
+                let rep = NSBitmapImageRep(cgImage: img)
+                var red = 0
+                for y in stride(from: 0, to: rep.pixelsHigh, by: 2) { for x in stride(from: 0, to: rep.pixelsWide, by: 2) {
+                    if let col = rep.colorAt(x: x, y: y), col.redComponent > 0.8, col.greenComponent < 0.45, col.alphaComponent > 0.6 { red += 1 }
+                } }
+                shots.append((Date().timeIntervalSince(t0), red))
+                if shots.count == 4 { try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path)) }
+            }
+            while sem.wait(timeout: .now() + 0.01) == .timedOut { RunLoop.main.run(until: Date().addingTimeInterval(0.01)) }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { Thread.sleep(forTimeInterval: 0.5) }
+        for _ in 0..<6 { RunLoop.main.run(until: Date().addingTimeInterval(0.25)); shoot() }
+        print("Stift: " + shots.map { String(format: "%.2fs=%d", $0.0, $0.1) }.joined(separator: " "))
+        print("Markierungen: \(ink.marks.count) → \(path)")
+        ink.stop()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        return (shots.map(\.1).max() ?? 0) > 50 ? 0 : 1
     }
 
     /// screenName: Teil des Bildschirm-Namens statt Bildschirm unter der Maus
@@ -1126,29 +1987,67 @@ enum ScreenRecDev {
         Task {
             defer { sem.signal() }
             let glow: ScreenRecCursorGlow? = withGlow ? await MainActor.run { let g = ScreenRecCursorGlow(); g.start(); return g } : nil
+            // 18.10.2026: was hier läuft, wird bei einem Fehler im catch abgebaut (nie eine Aufnahme/Stift/Leuchten zurücklassen)
+            var ink: ScreenRecInk?
+            var live: SCStream?, liveOut: SCRecordingOutput?
             do {
                 let screen = screenName.flatMap { n in NSScreen.screens.first { $0.localizedName.localizedCaseInsensitiveContains(n) } } ?? ScreenRec.screenUnderMouse()
                 let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
-                guard let disp = content.displays.first(where: { $0.displayID == ScreenRec.displayID(screen) }) else { print("Bildschirm nicht gefunden"); return }
+                guard let disp = content.displays.first(where: { $0.displayID == ScreenRec.displayID(screen) }) else {
+                    print("Bildschirm nicht gefunden"); await MainActor.run { glow?.stop() }; return
+                }
                 let cfg = ScreenRec.configuration(display: disp, screen: screen, sound: .none)
                 // wie in der App: eigene Fenster raus – außer dem Maus-Leuchten (glow)
                 let me = content.applications.filter { $0.processID == ProcessInfo.processInfo.processIdentifier }
                 let gw = glow.flatMap { g in content.windows.first { $0.windowID == CGWindowID(g.windowNumber) } }
                 if glow != nil { print("Leuchten-Fenster im Inhalt: \(gw != nil)") }
-                let st = SCStream(filter: SCContentFilter(display: disp, excludingApplications: me, exceptingWindows: gw.map { [$0] } ?? []), configuration: cfg, delegate: nil)
+                // „ink“: Stift malt einen Kreis, während der Main-Thread absichtlich zweimal 0,5 s hängt
+                let withInk = CommandLine.arguments.contains("ink")
+                ink = withInk ? await MainActor.run { let k = ScreenRecInk(); k.prepare(on: screen); return k } : nil
+                let content2 = withInk ? try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false) : content
+                let iw = ink.flatMap { k in content2.windows.first { $0.windowID == CGWindowID(k.windowNumber) } }
+                if withInk { print("Stift-Fenster im Inhalt: \(iw != nil)") }
+                let st = SCStream(filter: SCContentFilter(display: disp, excludingApplications: me, exceptingWindows: [gw, iw].compactMap { $0 }), configuration: cfg, delegate: nil)
                 let oc = SCRecordingOutputConfiguration(); oc.outputURL = url; oc.outputFileType = .mp4; oc.videoCodecType = .h264
-                try st.addRecordingOutput(SCRecordingOutput(configuration: oc, delegate: d))
+                let out = SCRecordingOutput(configuration: oc, delegate: d)
+                live = st; liveOut = out
+                try st.addRecordingOutput(out)
                 try await st.startCapture()
+                if let k = ink, let sc = screen {
+                    let c = CGPoint(x: sc.frame.width / 2, y: sc.frame.height / 2)
+                    let ring = (0...180).map { i -> CGPoint in let a = Double(i) / 180 * 2 * .pi; return CGPoint(x: c.x + 220 * cos(a), y: c.y + 160 * sin(a)) }
+                    try await Task.sleep(nanoseconds: 300_000_000)
+                    k.simulate(ring, every: 1.0 / 120)
+                    for d in [0.3, 0.9] { DispatchQueue.main.asyncAfter(deadline: .now() + d) { Thread.sleep(forTimeInterval: 0.5) } }
+                    try await Task.sleep(nanoseconds: 2_200_000_000)
+                    print("Stift: \(k.marks.count) Markierung(en)")
+                    await MainActor.run { k.stop() }
+                    ink = nil
+                }
                 try await Task.sleep(nanoseconds: 2_000_000_000)
+                // „switch“: wie „Video folgt der Maus“ – mitten in der Aufnahme auf einen anderen Bildschirm wechseln
+                if CommandLine.arguments.contains("switch"), let other = content.displays.first(where: { $0.displayID != disp.displayID }) {
+                    try await st.updateContentFilter(SCContentFilter(display: other, excludingApplications: me, exceptingWindows: []))
+                    print("gewechselt auf Bildschirm \(other.displayID) (\(other.width)×\(other.height))")
+                    try await Task.sleep(nanoseconds: 2_000_000_000)
+                }
                 await MainActor.run { glow?.stop() }
-                try await st.stopCapture()
+                // „teardown“: genau der Abbau der App (Ausgabe abhängen → Stream stoppen) statt nur stopCapture
+                if CommandLine.arguments.contains("teardown") { await ScreenRec.tearDown(st, out, captureStarted: true, why: "Probe") }
+                else { try await st.stopCapture() }
+                live = nil; liveOut = nil
                 for _ in 0..<60 where !d.done { try await Task.sleep(nanoseconds: 100_000_000) }
                 let tracks = try await AVURLAsset(url: url).load(.tracks)
                 let v = tracks.first { $0.mediaType == .video }
                 let size = try await v?.load(.naturalSize) ?? .zero
                 print("\(ScreenRec.name(screen)): \(Int(size.width))×\(Int(size.height)), Spuren \(tracks.count) → \(url.path)")
                 rc = v != nil && size.width >= CGFloat(disp.width) ? 0 : 1
-            } catch { print("Fehler: \(error.localizedDescription)") }
+            } catch {
+                print("Fehler: \(error.localizedDescription)")
+                await ScreenRec.tearDown(live, liveOut, captureStarted: true, why: "Probe")
+                let k = ink
+                await MainActor.run { k?.stop(); glow?.stop() }   // Layer/Fenster nur auf dem Main-Thread
+            }
         }
         while sem.wait(timeout: .now() + 0.05) == .timedOut { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
         return rc

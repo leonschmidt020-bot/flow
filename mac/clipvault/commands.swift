@@ -265,10 +265,17 @@ final class CommandChannel: NSObject {
         case "reload":
             store.reloadFromDisk(); SharedVault.shared.load(); SharedSeen.shared.reload(); ChangeNotifier.bump()
             return Result(ok: true)
-        case "show":
+        case "show":   // optional x/y = Bildschirm dieses Punkts (Flow-Pille), toggle=1 = offenes Panel schliessen
+            func num(_ k: String) -> Double? { (o[k] as? Double) ?? (o[k] as? String).flatMap(Double.init) }
+            let at: NSPoint? = num("x").flatMap { x in num("y").map { NSPoint(x: x, y: $0) } }
+            let toggle = num("toggle") == 1 || (o["toggle"] as? Bool) == true
             DispatchQueue.main.async {
                 let pc = AppState.shared.panel
-                if !pc.panel.isVisible { pc.show(on: NSScreen.main ?? NSScreen.screens[0]) }
+                if toggle, pc.panel.isVisible { pc.hide(); return }
+                // Klick auf die Pille hat das offene Panel gerade schon geschlossen (globaler Klick-Wächter) → zu lassen
+                if toggle, Date().timeIntervalSince(pc.lastHiddenAt) < 0.6 { return }
+                let scr = at.flatMap { p in NSScreen.screens.first { NSMouseInRect(p, $0.frame, false) } }
+                if !pc.panel.isVisible { pc.show(on: scr ?? NSScreen.main ?? NSScreen.screens[0]) }
                 if let c = self.str(o, "collection") { pc.open(collection: c) }
             }
             return Result(ok: true)

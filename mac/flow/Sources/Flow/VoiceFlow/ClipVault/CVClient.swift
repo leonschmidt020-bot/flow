@@ -175,6 +175,22 @@ final class ClipVaultClient: ObservableObject {
         timer = t
     }
 
+    /// Gegenstück zu start(): kein ClipVault-Inhalt mehr zu sehen (Hub-Fenster freigegeben). Die Seiten rufen start() beim nächsten Zeigen wieder.
+    /// 18.10.2026: einmal geöffnet liefen 2-s-Takt und Beobachter für immer, und jede Kopie dekodierte den ganzen Verlauf neu.
+    func stop() {
+        guard started else { return }
+        started = false
+        timer?.invalidate(); timer = nil
+        for o in [observer, resultObserver].compactMap({ $0 }) { DistributedNotificationCenter.default().removeObserver(o) }
+        observer = nil; resultObserver = nil
+        waiting.removeAll(); pending.removeAll()
+        indexStamp = nil; collectionsStamp = nil
+        items = []; collections = []; freshIDs = []
+        loadedAt = nil; loadError = nil; toast = nil
+    }
+
+    var isRunning: Bool { started }
+
     // MARK: Laden
 
     func reload(force: Bool, sync: Bool = false) {
@@ -209,7 +225,10 @@ final class ClipVaultClient: ObservableObject {
             self.loadError = r.2
             self.loadedAt = Date()
         }
-        if sync { apply(work()) } else { io.async { let r = work(); DispatchQueue.main.async { apply(r) } } }
+        if sync { apply(work()) } else {
+            // inzwischen gestoppt (stop()) → das Ergebnis nicht mehr festhalten
+            io.async { let r = work(); DispatchQueue.main.async { [weak self] in if self?.started == true { apply(r) } } }
+        }
     }
 
     private func applyPending(_ list: [CVItem]) -> [CVItem] {
@@ -404,6 +423,7 @@ final class ClipVaultClient: ObservableObject {
     }
 
     func copyLocally(_ item: CVItem) {
+        FlowPasteboard.noteOwnWrite()
         let pb = NSPasteboard.general
         pb.clearContents()
         switch item.kind {
@@ -499,31 +519,44 @@ final class ClipVaultClient: ObservableObject {
 
 final class CVThumbs {
     static let shared = CVThumbs()
-    private let cache = NSCache<NSString, NSImage>()
+    /// 18.10.2026: vorher NSCache mit countLimit 400 und ohne Kostengrenze – Leuchtkasten (3200 px ≈ 25 MB je Bild)
+    /// und Vorschau (1200 px) blieben nach dem Stöbern alle im Speicher. Jetzt: kleine Bilder ≤ 48 MB,
+    /// große (≥ 1200 px) nur in zwei Plätzen (aktuelles + voriges, Blättern bleibt flüssig); beim Freigeben des Hubs leer.
+    static let bigPixel = 1200
+    let small = VFImageCache(countLimit: 400, costLimit: 48 << 20)
+    let big = VFImageCache(countLimit: 2, costLimit: 96 << 20)
     private let q = DispatchQueue(label: "hub.clipvault.thumbs", qos: .userInitiated, attributes: .concurrent)
 
-    init() { cache.countLimit = 400 }
+    private func store(for maxPixel: Int) -> VFImageCache { maxPixel >= Self.bigPixel ? big : small }
+    private static func key(_ url: URL, _ maxPixel: Int) -> String { "\(maxPixel)|\(url.path)" }
 
-    func cached(_ url: URL, _ maxPixel: Int) -> NSImage? { cache.object(forKey: "\(maxPixel)|\(url.path)" as NSString) }
+    func cached(_ url: URL, _ maxPixel: Int) -> NSImage? { store(for: maxPixel).object(Self.key(url, maxPixel)) }
 
     func load(_ url: URL, maxPixel: Int, _ done: @escaping (NSImage?) -> Void) {
-        let key = "\(maxPixel)|\(url.path)" as NSString
-        if let c = cache.object(forKey: key) { done(c); return }
-        q.async { [cache] in
-            let img = CVThumbs.make(url, maxPixel: maxPixel)
-            if let img { cache.setObject(img, forKey: key) }
+        let key = Self.key(url, maxPixel), cache = store(for: maxPixel)
+        if let c = cache.object(key) { done(c); return }
+        q.async {
+            let cg = CVThumbs.makeCG(url, maxPixel: maxPixel)
+            let img = cg.map { NSImage(cgImage: $0, size: NSSize(width: $0.width, height: $0.height)) }
+            if let img, let cg { cache.set(img, key: key, cost: VFImageCache.cost(cg)) }
             DispatchQueue.main.async { done(img) }
         }
     }
 
+    /// Alles loslassen (Hub-Fenster freigegeben; nur vom Hauptthread)
+    func purge() { small.removeAll(); big.removeAll(); Self.sizes.removeAll() }
+
     static func make(_ url: URL, maxPixel: Int) -> NSImage? {
+        makeCG(url, maxPixel: maxPixel).map { NSImage(cgImage: $0, size: NSSize(width: $0.width, height: $0.height)) }
+    }
+
+    static func makeCG(_ url: URL, maxPixel: Int) -> CGImage? {
         guard let src = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary) else { return nil }
         let opts: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true,
                                      kCGImageSourceCreateThumbnailWithTransform: true,
                                      kCGImageSourceShouldCacheImmediately: true,
                                      kCGImageSourceThumbnailMaxPixelSize: maxPixel]
-        guard let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else { return nil }
-        return NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
+        return CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary)
     }
 
     /// Pixelmaße ohne das Bild zu dekodieren

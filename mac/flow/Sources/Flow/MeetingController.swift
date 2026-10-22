@@ -431,7 +431,8 @@ enum MeetingProcessor {
         guard var m = await MainActor.run(body: { MeetingStore.shared.meeting(id) }) else { return }
         let t0 = Date()
         // Speicher: die Spuren nacheinander laden (1-h-Meeting ≈ 230 MB je Spur) – erst Systemton, dann Mikrofon
-        var sys = WavWriter.read(m.systemURL)
+        // 18.10.2026: Spur = WAV oder (nach dem Komprimieren) .m4a – „Neu auswerten“ liest beide gleich (MeetingAudio)
+        var sys = WavWriter.read(m.systemTrack)
         let sysSpeech = speechSeconds(sys)
 
         var segments: [Segment] = []
@@ -446,31 +447,37 @@ enum MeetingProcessor {
         do {
             if online {
                 await note(id, "Sprecher werden erkannt …")
-                let (turns, emb) = try await Diarizer.shared.diarize(sys)
+                let (turns, emb) = await diarizeOrSingle(sys, track: "andere", id: id)
                 let keyMap = speakerKeyMap(turns)
                 for (raw, e) in emb { if let k = keyMap[raw] { embeddings[k] = e } }
                 await note(id, "Transkribiere Teilnehmer …")
-                let words = try await Transcriber.shared.transcribe(sys).words
+                // 18.10.2026: an Ort und Stelle angleichen statt in transcribe() kopieren (1 h: −230 MB Spitze), gleiches Ergebnis
+                Transcriber.normalizeInPlace(&sys)
+                let words = try await Transcriber.shared.transcribe(sys, normalize: false).words
                 segments += assign(words: words, turns: turns, keyMap: keyMap)
             }
             sys = []
             // Leise Spur (Anruf-App mit Sprachverarbeitung) vor der Sprach-Messung angleichen – sonst zählt sie als stumm
-            let mic = Transcriber.normalized(WavWriter.read(m.micURL))
+            var mic = WavWriter.read(m.micTrack)
+            Transcriber.normalizeInPlace(&mic)
             let micSpeech = speechSeconds(mic)
             log(String(format: "Auswertung %@: Mikro %.0fs Sprache, System %.0fs Sprache", id, micSpeech, sysSpeech))
             if micSpeech > 1 {
                 await note(id, "Transkribiere dein Mikrofon …")
                 if online {
-                    let words = try await Transcriber.shared.transcribe(mic).words
+                    // transcribe() hat hier bisher ein zweites Mal angeglichen – genauso, nur ohne Kopie
+                    Transcriber.normalizeInPlace(&mic)
+                    let words = try await Transcriber.shared.transcribe(mic, normalize: false).words
                     let mine = group(words: words, speaker: "me")
                     segments += removeEcho(mine, others: segments)
                 } else {
                     // Präsenz-Meeting: alles kommt übers Mikrofon → dort Sprecher trennen.
                     await note(id, "Sprecher im Raum werden erkannt …")
-                    let (turns, emb) = try await Diarizer.shared.diarize(mic)
+                    let (turns, emb) = await diarizeOrSingle(mic, track: "Mikro", id: id)
                     let keyMap = speakerKeyMap(turns)
                     for (raw, e) in emb { if let k = keyMap[raw] { embeddings[k] = e } }
-                    let words = try await Transcriber.shared.transcribe(mic).words
+                    Transcriber.normalizeInPlace(&mic)   // zweites Angleichen wie bisher in transcribe(), ohne Kopie
+                    let words = try await Transcriber.shared.transcribe(mic, normalize: false).words
                     segments += assign(words: words, turns: turns, keyMap: keyMap)
                 }
             }
@@ -501,10 +508,15 @@ enum MeetingProcessor {
         log(String(format: "Auswertung fertig in %.1fs: %d Abschnitte", Date().timeIntervalSince(t0), segments.count))
         let mm = m
         await MainActor.run { MeetingStore.shared.save(mm) }
-        // „Audio behalten“ aus → Tonspuren nach erfolgreicher Auswertung löschen
+        // „Audio behalten“ aus → Tonspuren nach erfolgreicher Auswertung löschen (WAV und ggf. schon komprimierte .m4a)
         if !Settings.shared.keepAudio {
-            try? FileManager.default.removeItem(at: mm.micURL)
-            try? FileManager.default.removeItem(at: mm.systemURL)
+            for u in [mm.micURL, mm.systemURL] {
+                try? FileManager.default.removeItem(at: u)
+                try? FileManager.default.removeItem(at: MeetingAudio.compressedURL(u))
+            }
+        } else {
+            // 18.10.2026: behaltenen Ton im Hintergrund zu AAC komprimieren (~8× kleiner), die WAV erst nach der Prüfung weg
+            MeetingAudioCompressor.shared.enqueue(id)
         }
         if Settings.shared.autoSummary && ClaudeCLI.isAvailable && !segments.isEmpty { await summarize(id: id, force: false) }
     }
@@ -547,6 +559,19 @@ enum MeetingProcessor {
     }
 
     // MARK: Hilfen
+
+    /// Sprechertrennung, die das Meeting nie mehr kippt.
+    /// 05.10.2026 (Teams, 130 s): die eigene Pegelmessung sah „andere“ sprechen, pyannote fand aber keine Sprache
+    /// → `noSpeechDetected` → die GANZE Auswertung brach ab („Fehler: No speech detected in audio“), auch die
+    /// Mikro-Spur wurde nie transkribiert. Jetzt: ohne Ergebnis ein Sprecher („S1“) – Parakeet hört trotzdem zu,
+    /// und dein Mikro wird danach ganz normal ausgewertet.
+    static func diarizeOrSingle(_ samples: [Float], track: String, id: String) async -> ([Diarizer.Turn], [String: [Float]]) {
+        do { return try await Diarizer.shared.diarize(samples) }
+        catch {
+            log("Auswertung \(id): Sprechertrennung (\(track)) ohne Ergebnis (\(error)) – weiter mit einem Sprecher")
+            return ([], [:])
+        }
+    }
 
     private static func speechSeconds(_ s: [Float]) -> Double {
         let f = 480

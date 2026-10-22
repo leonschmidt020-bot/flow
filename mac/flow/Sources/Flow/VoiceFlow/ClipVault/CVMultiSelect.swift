@@ -9,6 +9,11 @@ import SwiftUI
 
 /// Reine Auswahl-Logik (gleiches Verhalten wie MultiSelection in ClipVault)
 struct CVPickSet: Equatable {
+    /// Pfad für Terminal/Claude Code (Leerzeichen & Sonderzeichen mit \ – wie ClipVaults cvShellEscape)
+    static func shellEscape(_ p: String) -> String {
+        let special = Set(" \t!\"#$&'()*,;<>?[\\]^`{|}~=%")
+        return p.reduce(into: "") { o, ch in if special.contains(ch) { o.append("\\") }; o.append(ch) }
+    }
     private(set) var ids: [String] = []
     private(set) var anchor: String?
     var isActive: Bool { !ids.isEmpty }
@@ -117,10 +122,7 @@ extension ClipVaultClient {
     }
     /// Notweg ohne ClipVault: Datei-URLs je Bild/Datei + Klartext (maskierte Pfade, dann Texte)
     func copyManyLocally(_ list: [CVItem]) {
-        func esc(_ p: String) -> String {
-            let special = Set(" \t!\"#$&'()*,;<>?[\\]^`{|}~=%")
-            return p.reduce(into: "") { o, ch in if special.contains(ch) { o.append("\\") }; o.append(ch) }
-        }
+        let esc = CVPickSet.shellEscape
         var urls: [URL] = [], texts: [String] = []
         for i in list {
             switch i.kind {
@@ -138,6 +140,7 @@ extension ClipVaultClient {
         if items.isEmpty { items = [NSPasteboardItem()] }
         items[0].setString(text, forType: .string)
         let pb = NSPasteboard.general
+        FlowPasteboard.noteOwnWrite()
         pb.clearContents(); pb.writeObjects(items)
     }
 }

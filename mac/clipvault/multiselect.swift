@@ -152,6 +152,17 @@ enum MultiCopy {
         else { p.items[0].string = p.text }
         return p
     }
+    /// Dateien wie die Mehrfachauswahl ablegen (09.10.: ZIP aus dem Verlauf / vom Partner ließ sich im Chat nicht einfügen –
+    /// nur die Datei-URL lag drin). Jetzt: je Datei die echte URL (Finder, Mail, WhatsApp) + alle Pfade als Text
+    /// (Claude Code/Terminal bekommen den Pfad und können die Datei öffnen/entpacken).
+    @discardableResult static func writeFiles(_ urls: [URL], to pb: NSPasteboard = .general) -> Bool {
+        let ok = urls.filter { FileManager.default.fileExists(atPath: $0.path) }
+        guard !ok.isEmpty else { return false }
+        var p = PastePlan()
+        p.items = ok.map { PasteItemPlan(fileURL: $0, pngFile: nil, string: nil) }
+        p.items[0].string = ok.map { cvShellEscape($0.path) }.joined(separator: " ")
+        return write(p, to: pb)
+    }
     /// Plan auf eine Zwischenablage schreiben (allgemeine ODER eigene Test-Zwischenablage)
     @discardableResult static func write(_ plan: PastePlan, to pb: NSPasteboard) -> Bool {
         guard !plan.items.isEmpty else { return false }
@@ -365,6 +376,24 @@ func runMultiSelectTest() -> Never {
     check("aelter als 24 h wird entfernt", !fm.fileExists(atPath: old.path) && fm.fileExists(atPath: plan.items[0].fileURL!.path))
 
     print(String(repeating: "-", count: 40))
+    // Einzelne Datei (ZIP) kopieren: echte Datei + Pfad als Text (09.10.)
+    do {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("cv-zip-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let z = dir.appendingPathComponent("Projekt (neu).zip"), z2 = dir.appendingPathComponent("b.pdf")
+        FileManager.default.createFile(atPath: z.path, contents: Data([0x50, 0x4B, 3, 4]))
+        FileManager.default.createFile(atPath: z2.path, contents: Data([1]))
+        let pb = NSPasteboard(name: NSPasteboard.Name("app.flowdictation.clipvault.ziptest." + UUID().uuidString))
+        check("ZIP: geschrieben", MultiCopy.writeFiles([z], to: pb))
+        let urls = pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
+        check("ZIP: echte Datei-URL (Finder/Mail/WhatsApp)", urls.map(\.path) == [z.path])
+        check("ZIP: Pfad als Text (Claude Code)", pb.string(forType: .string) == cvShellEscape(z.path))
+        check("2 Dateien: beide URLs + beide Pfade", MultiCopy.writeFiles([z, z2], to: pb)
+              && (pb.readObjects(forClasses: [NSURL.self], options: nil) as? [URL] ?? []).count == 2
+              && pb.string(forType: .string) == cvShellEscape(z.path) + " " + cvShellEscape(z2.path))
+        check("fehlende Datei: nichts geschrieben", !MultiCopy.writeFiles([dir.appendingPathComponent("weg.zip")], to: pb))
+        pb.releaseGlobally(); try? FileManager.default.removeItem(at: dir)
+    }
     print(fails == 0 ? "ALLE \(n) PRUEFUNGEN OK" : "\(fails) VON \(n) FEHLGESCHLAGEN")
     exit(fails == 0 ? 0 : 1)
 }

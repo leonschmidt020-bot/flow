@@ -23,6 +23,27 @@ INST_REASON=""
 APP_NAME="${APP_NAME:-Flow}"
 
 inst_now() { date +%s; }
+
+# Projekt umgezogen (z. B. aus iCloud „Dokumente – MacBook Air von …“ nach ~/Developer)? Dann zeigt
+# .build/workspace-state.json noch auf den alten Ort → swift build scheitert mit „missing required module
+# 'CNemoTextProcessing'“ / „Resource deadlock avoided“ (Bericht 18.10.2026). Alten Bauzustand beiseitelegen
+# (Papierkorb, sonst umbenennen – gelöscht wird nichts), swift build baut dann neu (dauert länger).
+# $1 = Projektordner (Standard: aktueller). Ausgabe: alter Ort, wenn geheilt; Rückgabe 0 = nichts zu tun oder geheilt.
+inst_heal_moved_build() {
+  local dir="${1:-$(pwd)}" state stale tgt dest stamp
+  state="$dir/.build/workspace-state.json"
+  [ -f "$state" ] || return 0
+  stale="$(grep -o '"path" *: *"/[^"]*/\.build/' "$state" | sed 's/^"path" *: *"//; s#/\.build/$##' | sort -u \
+    | grep -vxF "$dir" | grep -vxF "$(cd "$dir" && pwd -P)" | head -1 || true)"
+  [ -n "$stale" ] || return 0
+  tgt="$dir/.build"; [ -L "$tgt" ] && tgt="$(cd "$dir/.build" && pwd -P)"
+  stamp="$(date +%Y%m%d-%H%M%S)"
+  dest="$HOME/.Trash/flow-build-alt-$stamp"
+  if ! mv "$tgt" "$dest" 2>/dev/null; then dest="$tgt.alt-$stamp"; mv "$tgt" "$dest" || return 1; fi
+  [ -L "$dir/.build" ] && mkdir -p "$tgt"   # Verknüpfung (.build → Cache-Ordner) bleibt gültig
+  echo "$stale"
+  echo "» Bauordner zeigte noch auf den alten Ort ($stale) – beiseitegelegt nach $dest, baue neu (dauert einige Minuten)" >&2
+}
 inst_timeout() { local s="$1"; shift; perl -e 'alarm shift @ARGV; exec @ARGV or exit 127' "$s" "$@"; }
 inst_plist_get() { /usr/libexec/PlistBuddy -c "Print :$2" "$1/Contents/Info.plist" 2>/dev/null || true; }
 inst_json_get() { plutil -extract "$2" raw -o - "$1" 2>/dev/null || true; }
@@ -35,14 +56,28 @@ inst_log_line() {
 }
 
 # --- Hooks (Standard = echter LaunchAgent) ---
+INST_APP_RE="^$HOME/Applications/$APP_NAME\.app(\.previous)?/Contents/MacOS/"
 inst_stop_app() {
   [ -n "${INST_TEST:-}" ] && return 0
+  local pids t0 left
+  pids="$(pgrep -f "$INST_APP_RE" 2>/dev/null | tr '\n' ' ')"
   launchctl bootout "gui/$(id -u)/$BUNDLE_ID" 2>/dev/null || true
-  # NUR genau diese App (~/Applications/Flow.app) beenden – nie andere Diktier-Apps mit ähnlichem Namen
-  pkill -f "^$HOME/Applications/$APP_NAME\.app/Contents/MacOS/" 2>/dev/null || true
-  # nur Flows eigener whisper-server (geheimer Pfad /flow-<uuid>, siehe WhisperEngine.swift)
+  # NUR unsere App in ~/Applications beenden – nie das echte Flow in /Applications
+  pkill -f "$INST_APP_RE" 2>/dev/null || true
   pkill -f "whisper-server .*--request-path /flow-[0-9a-f]{8}-" 2>/dev/null || true
-  sleep 0.5
+  # 09.10.2026 (Bericht): die alte App überlebte das Beenden, die neue startete als „zweite Instanz“, beendete sich
+  # sofort → kein Lebenszeichen → Rücknahme. Jetzt: warten, bis sie WIRKLICH weg ist, sonst hart beenden.
+  t0="$(inst_now)"
+  while left="$(pgrep -f "$INST_APP_RE" 2>/dev/null | tr '\n' ' ')"; [ -n "${left// /}" ]; do
+    if [ $(( $(inst_now) - t0 )) -ge "${FLOW_STOP_WAIT:-8}" ]; then
+      inst_log_line "Update: alte App (PID ${left% }) reagierte nicht aufs Beenden – hart beendet"
+      pkill -9 -f "$INST_APP_RE" 2>/dev/null || true
+      sleep 1; break
+    fi
+    sleep 0.25
+  done
+  [ -n "${pids// /}" ] && inst_log_line "Update: alte App beendet (PID ${pids% }, $(( $(inst_now) - t0 )) s)"
+  sleep 0.3
 }
 inst_start_app() {
   [ -n "${INST_TEST:-}" ] && return 0
@@ -171,6 +206,7 @@ inst_install_staged() {   # $1 = Staging-Bundle, $2 = Version, $3 = Build-Nummer
   local since
   if ! inst_verify "$1" "$2"; then echo "✗ ${INST_REASON} – die installierte App bleibt unverändert"; return 1; fi
   echo "✓ Staging geprüft (codesign --deep --strict, --version = $2)"
+  [ -z "${INST_TEST:-}" ] && inst_log_line "Update: $2 gebaut und geprüft – tausche jetzt"
   if ! inst_wait_idle; then echo "» ${INST_REASON}"; return 75; fi
   inst_stop_app
   INST_PHASE=stopped

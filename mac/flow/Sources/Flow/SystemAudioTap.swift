@@ -216,9 +216,33 @@ final class SystemAudioTap {
             return
         }
         stateLock.lock(); let silentFor = Date().timeIntervalSince(lastIO); stateLock.unlock()
-        if silentFor > Self.stallTimeout {
+        // Spielt der Mac nichts ab, läuft das Ausgabegerät nicht und der Tap liefert keine Rückrufe – das ist kein Hänger.
+        // Früher: Neuaufbau alle 3 s während fast jedes Diktats (stderr.log: 5688× seit 27.09., bis 652× am Tag).
+        // Erst neu aufbauen, wenn das Gerät schon länger als stallTimeout läuft und trotzdem nichts ankommt.
+        guard Self.outputRunning() != false else { outputRunningSince = nil; return }
+        let since = outputRunningSince ?? Date()
+        if outputRunningSince == nil { outputRunningSince = since }
+        if silentFor > Self.stallTimeout, Date().timeIntervalSince(since) > Self.stallTimeout {
             rebuild(reason: (trigger.map { $0 + ", " } ?? "") + String(format: "keine Audiodaten seit %.1f s", silentFor))
         }
+    }
+
+    /// controlQueue: seit wann das Standard-Ausgabegerät (laut Watchdog) läuft
+    private var outputRunningSince: Date?
+
+    /// Läuft das Standard-Ausgabegerät gerade für irgendeinen Prozess? nil = unbekannt (dann wie früher prüfen).
+    static func outputRunning() -> Bool? {
+        var id = AudioObjectID(kAudioObjectUnknown)
+        var size = UInt32(MemoryLayout<AudioObjectID>.size)
+        var address = defaultOutputAddress
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &id) == noErr,
+              id != kAudioObjectUnknown else { return nil }
+        var running: UInt32 = 0
+        size = UInt32(MemoryLayout<UInt32>.size)
+        var a = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyDeviceIsRunningSomewhere,
+                                           mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        guard AudioObjectGetPropertyData(id, &a, 0, nil, &size, &running) == noErr else { return nil }
+        return running != 0
     }
 
     fileprivate func rebuild(reason: String) {

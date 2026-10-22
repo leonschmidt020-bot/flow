@@ -635,7 +635,10 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             return e
         }
     }
+    /// Wann das Panel zuletzt zuging (für „show“ mit toggle=1 vom Pillen-Knopf)
+    var lastHiddenAt = Date.distantPast
     func hide() {
+        if panel.isVisible { lastHiddenAt = Date() }
         if editingId != nil { finishEditUI() }   // ungespeicherte Bearbeitung verwerfen
         clearSelection(refresh: false)           // Auswahl gilt nur, solange das Panel offen ist
         CVQuickLook.shared.close()
@@ -1305,12 +1308,12 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         switch it.kind {
         case .text: pb.setString(it.text ?? "", forType: .string)
         case .file:
-            let urls: [NSURL] = (it.files ?? []).compactMap { r in
-                if FileManager.default.fileExists(atPath: r.orig) { return NSURL(fileURLWithPath: r.orig) }
-                if let st = r.stored { let p = Store.shared.dir.appendingPathComponent(st).path; if FileManager.default.fileExists(atPath: p) { return NSURL(fileURLWithPath: p) } }
+            let urls: [URL] = (it.files ?? []).compactMap { r in
+                if FileManager.default.fileExists(atPath: r.orig) { return URL(fileURLWithPath: r.orig) }
+                if let st = r.stored { let p = Store.shared.dir.appendingPathComponent(st).path; if FileManager.default.fileExists(atPath: p) { return URL(fileURLWithPath: p) } }
                 return nil
             }
-            if !urls.isEmpty { pb.writeObjects(urls) }
+            MultiCopy.writeFiles(urls, to: pb)
         case .image: if let d = Store.shared.dataFor(it) { pb.setData(d, forType: .png) }
         }
         AppState.shared.lastChange = pb.changeCount   // Reihenfolge/Ansicht bleibt stabil

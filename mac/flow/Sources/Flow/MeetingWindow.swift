@@ -4,10 +4,13 @@ import SwiftUI
 final class MeetingWindowController: NSObject, NSWindowDelegate {
     private var window: NSWindow?
     private weak var controller: MeetingController?
+    /// 18.10.2026: geschlossen blieb der SwiftUI-Baum stehen → 60 s nach dem Schließen freigeben (RamHygiene.swift)
+    private let releaser = VFWindowReleaser()
 
     init(controller: MeetingController) { self.controller = controller }
 
     func show() {
+        releaser.cancel()
         if window == nil, let c = controller {
             let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1040, height: 700),
                              styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
@@ -28,6 +31,11 @@ final class MeetingWindowController: NSObject, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         DispatchQueue.main.async { NSApp.setActivationPolicy(.accessory) }
+        releaser.schedule { [weak self] in
+            guard let self, let w = self.window, VFWindowReleaser.canDrop(w) else { return }
+            VFWindowReleaser.dismantle(w)
+            self.window = nil
+        }
     }
 }
 

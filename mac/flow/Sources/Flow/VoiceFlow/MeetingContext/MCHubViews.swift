@@ -393,27 +393,36 @@ struct MCLightbox: View {
 
 final class MCThumbCache {
     static let shared = MCThumbCache()
-    private let cache = NSCache<NSString, NSImage>()
+    /// 18.10.2026: vorher NSCache mit countLimit 120 ohne Kostengrenze – auch die 2400-px-Bilder des Leuchtkastens
+    /// (≈ 13 MB je Bildschirmfoto) blieben liegen. Kleine ≤ 32 MB, große (≥ 1200 px) nur zwei Plätze, beim Freigeben des Hubs leer.
+    let small = VFImageCache(countLimit: 120, costLimit: 32 << 20)
+    let big = VFImageCache(countLimit: 2, costLimit: 64 << 20)
     private let q = DispatchQueue(label: "flow.meetingkontext.thumbs", qos: .userInitiated, attributes: .concurrent)
-    init() { cache.countLimit = 120 }
+
+    private func store(for px: Int) -> VFImageCache { px >= CVThumbs.bigPixel ? big : small }
 
     func cached(_ url: URL, _ px: Int) -> NSImage? {
         let mod = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate?.timeIntervalSince1970) ?? 0
-        return cache.object(forKey: "\(px)|\(mod)|\(url.path)" as NSString)
+        return store(for: px).object("\(px)|\(mod)|\(url.path)")
     }
 
     func load(_ url: URL, _ px: Int, done: @escaping (NSImage?) -> Void) {
+        let cache = store(for: px)
         q.async {
             let mod = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate?.timeIntervalSince1970) ?? 0
-            let key = "\(px)|\(mod)|\(url.path)" as NSString
-            var img = self.cache.object(forKey: key)
+            let key = "\(px)|\(mod)|\(url.path)"
+            var img = cache.object(key)
             if img == nil, let cg = MCImageIO.thumbnail(url, maxPixel: px) {
-                img = NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
-                self.cache.setObject(img!, forKey: key)
+                let made = NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
+                cache.set(made, key: key, cost: VFImageCache.cost(cg))
+                img = made
             }
             DispatchQueue.main.async { done(img) }
         }
     }
+
+    /// Alles loslassen (Hub-Fenster freigegeben)
+    func purge() { small.removeAll(); big.removeAll() }
 }
 
 struct MCThumbView: View {
@@ -456,6 +465,7 @@ enum MCPasteboard {
     static func copyImage(_ url: URL) {
         guard let img = NSImage(contentsOf: url) else { return }
         let pb = NSPasteboard.general
+        FlowPasteboard.noteOwnWrite()
         pb.clearContents()
         pb.writeObjects([img])
     }

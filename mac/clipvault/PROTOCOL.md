@@ -202,7 +202,7 @@ ClipVault ergänzt „gelernt von" (= eigener Name, siehe 4) und verschickt es �
 | `vocabInbox` | opt. `all` (`1`) | Posteingang (4.2): `items` = `[{id, word, type, by, createdAt, dir, inbox}]` (neueste zuerst; mit `all` alle Wörter), `count` | – |
 | `vocabAck` | `id`, `ids` (durch Komma getrennt) **oder** `all` | Posteingang bestätigt (abgeholt). Antwort `acked` (ids), `count` (was noch offen ist) | – |
 | `reload` | – | `index.json`, `collections.json`, `shared.json`, `shared-seen.json` neu von Platte lesen | – |
-| `show` | opt. `collection` (id oder `"__shared__"`) | Panel öffnen | – |
+| `show` | opt. `collection` (id oder `"__shared__"`), opt. `x`/`y` (Bildschirmpunkt → Panel auf diesem Bildschirm), opt. `toggle: 1` (offenes Panel schließen) | Panel öffnen | – |
 
 **Antwort** (nur mit `reqId`): Name **`app.flowdictation.clipvault.result`**, `object` = JSON-String
 `{"reqId":"…","action":"…","ok":true,"id":"…"}` bzw. `{"ok":false,"error":"Eintrag nicht gefunden"}`.

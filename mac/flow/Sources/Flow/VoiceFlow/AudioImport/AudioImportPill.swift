@@ -18,7 +18,7 @@ final class AudioImportPillOverlay {
     private weak var pill: PillController?
     private var panel: NSPanel?
     private var view: AudioImportPillView?
-    private var timer: Timer?
+    private var timer: AdaptiveTimer?
     private var dragChange = NSPasteboard(name: .drag).changeCount
     private var dragging = false
     /// Laufende Datei, deren Wasser gerade gezeigt wird (+ letzter angezeigter Pegel)
@@ -50,9 +50,7 @@ final class AudioImportPillOverlay {
         p.contentView = v
         panel = p
         view = v
-        let t = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in self?.tick() }
-        RunLoop.main.add(t, forMode: .common)
-        timer = t
+        timer = AdaptiveTimer(interval: 1.0 / 30.0) { [weak self] in self?.tick() }
     }
 
     func refresh() { tick() }
@@ -81,12 +79,14 @@ final class AudioImportPillOverlay {
         guard let pill, let panel, let view else { return }
         let capsule = pill.view.capsuleRectInScreen
         guard capsule.width > 0 else { return }
-        // Läuft gerade ein Datei-Zug (URL oder Versprechen)?
+        // Läuft gerade ein Datei-Zug (URL oder Versprechen)? Zieh-Ablage nur bei gedrückter Taste anfassen.
         let pressed = NSEvent.pressedMouseButtons & 1 == 1
-        let pb = NSPasteboard(name: .drag)
-        if pressed && pb.changeCount != dragChange {
-            dragChange = pb.changeCount
-            dragging = AudioDropReader.canAccept(pb)
+        if pressed {
+            let pb = NSPasteboard(name: .drag)
+            if pb.changeCount != dragChange {
+                dragChange = pb.changeCount
+                dragging = AudioDropReader.canAccept(pb)
+            }
         }
         if !pressed && !view.targeted { dragging = false }
         let mouse = NSEvent.mouseLocation
@@ -109,6 +109,9 @@ final class AudioImportPillOverlay {
         let fraction = level
         let showProgress = fraction != nil && idle && !pill.view.suppressed
         let wanted = near || showProgress || view.targeted
+        // 30 Hz nur, wenn gezogen wird, Wasser läuft oder das Fenster sichtbar ist – sonst 4 Hz (Ziehen erkennt der
+        // nächste Takt nach ≤0,25 s, dann wieder schnell)
+        timer?.set(pressed || wanted || dragging || finish != nil || panel.isVisible ? 1.0 / 30.0 : AdaptiveTimer.restInterval)
         if wanted {
             let c = NSPoint(x: capsule.midX, y: capsule.midY)
             let scr = NSScreen.screens.first { NSMouseInRect(c, $0.frame, false) } ?? NSScreen.main

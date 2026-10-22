@@ -171,12 +171,13 @@ struct CVItemVisual: View {
 }
 
 enum CVFileIcon {
-    private static var cache: [String: NSImage] = [:]
+    /// 18.10.2026: vorher ein Wörterbuch ohne Grenze (jede je gezeigte Datei für immer)
+    private static let cache: NSCache<NSString, NSImage> = { let c = NSCache<NSString, NSImage>(); c.countLimit = 200; return c }()
     static func icon(_ url: URL) -> NSImage {
-        if let c = cache[url.path] { return c }
+        if let c = cache.object(forKey: url.path as NSString) { return c }
         let ic = NSWorkspace.shared.icon(forFile: url.path)
         ic.size = NSSize(width: 64, height: 64)
-        cache[url.path] = ic
+        cache.setObject(ic, forKey: url.path as NSString)
         return ic
     }
     static func size(_ url: URL) -> Int64? {

@@ -88,7 +88,7 @@ final class SmartPillBadge {
         if show { showDot(); positionDot(pill) } else { hideDot() }
         let m = NSEvent.mouseLocation
         let dotFrame = dot?.isVisible == true ? dot!.frame : .zero
-        let hot = pill.insetBy(dx: -6, dy: -6).contains(m) || dotFrame.insetBy(dx: -4, dy: -4).contains(m)
+        let hot = VFNotify.shared.mouseOnPill(pill, m) || dotFrame.insetBy(dx: -4, dy: -4).contains(m)
         if isListOpen {
             let inside = hot || (list?.frame.insetBy(dx: -6, dy: -6).contains(m) ?? false)
             if inside { leftSince = nil } else {
@@ -130,7 +130,7 @@ final class SmartPillBadge {
 
     func openList() {
         guard !isListOpen, !listModel.items.isEmpty, let pill = pillRect() else { return }
-        let p = list ?? SmartBadgePanel(size: NSSize(width: SmartPillBadge.listWidth, height: 200), acceptsMouse: true)
+        let p = SpaceGuard.fresh(list, "Vorschläge") ?? SmartBadgePanel(size: NSSize(width: SmartPillBadge.listWidth, height: 200), acceptsMouse: true)
         list = p
         let host = VFNotifyHostingView(rootView: SmartSuggestionList(model: listModel))
         p.contentView = host
@@ -138,6 +138,11 @@ final class SmartPillBadge {
         layoutList(pill: pill)
         p.alphaValue = 1
         p.orderFrontRegardless()
+        // Fensterserver zeigt es wirklich? Sonst frisches Fenster (siehe SpaceGuard.ensureShown, 10.10.2026)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            guard let self, let q = self.list, q === p else { return }
+            self.list = SpaceGuard.ensureShown(q, "Vorschläge") { SmartBadgePanel(size: NSSize(width: SmartPillBadge.listWidth, height: 200), acceptsMouse: true) }
+        }
         DispatchQueue.main.async { withAnimation(.spring(response: 0.36, dampingFraction: 0.82)) { self.listModel.appeared = true } }
         leftSince = nil
         startTimer()

@@ -43,7 +43,7 @@ struct VFNotice {
     /// Kleine Vorschaubilder unter dem Text (z. B. das Video bei „Aufnahme fertig“) – bis 6 Stück, dazu „+N“
     var thumbnails: [URL] = []
     var thumbnailMore = 0
-    /// Zeile unter der Leiste (z. B. Video-Name mit Endung)
+    /// Zeile unter der Leiste (z. B. Video-/Dokument-Namen mit Endung)
     var thumbnailCaption: String? = nil
 }
 
@@ -66,6 +66,15 @@ final class VFNotify {
 
     /// Liefert die Pille (Kapsel) in Bildschirmkoordinaten – vom AppDelegate zu setzen.
     var pillAnchor: (() -> NSRect?)?
+    /// Liegt die Maus über der Pille? (vom AppDelegate zu setzen: PillView.isHovered – mit Hysterese, siehe
+    /// PillView.hoverZoneContains). nil = nur das Rechteck aus pillAnchor ± 6 pt.
+    var pillHovered: (() -> Bool)?
+
+    /// Maus auf der Pille: dieselbe Antwort, die auch die Pille selbst benutzt (sonst flackert „drauf/nicht drauf“)
+    func mouseOnPill(_ pill: NSRect, _ m: NSPoint = NSEvent.mouseLocation) -> Bool {
+        if pill.insetBy(dx: -6, dy: -6).contains(m) { return true }
+        return pillHovered?() ?? false
+    }
 
     /// Bildquelle (für Tests austauschbar). Standard: Resources/Assets über VFAsset.
     static var imageProvider: (String) -> NSImage? = { VFAsset.image($0) }
@@ -114,7 +123,7 @@ final class VFNotify {
     private var lastVariant: [String: String] = [:]
     func pickVariant(_ name: String) -> String {
         guard name.range(of: #"_\d+$"#, options: .regularExpression) == nil else { return name }   // schon eine feste Variante
-        let all = [name] + (2...9).map { "\(name)_\($0)" }.filter { VFAsset.image($0) != nil }
+        let all = [name] + (2...9).map { "\(name)_\($0)" }.filter { VFAsset.exists($0) }
         guard all.count > 1 else { return name }
         let pick = all.filter { $0 != lastVariant[name] }.randomElement() ?? name
         lastVariant[name] = pick
@@ -182,7 +191,7 @@ final class VFNotify {
         m.onClose = { [weak self] in self?.close(reason: .xOrTimeout) }
         model = m
 
-        let p = panel ?? VFNotifyPanel()
+        let p = SpaceGuard.fresh(panel, "Karte") ?? VFNotifyPanel()
         panel = p
         let host = VFNotifyHostingView(rootView: VFNotifyStage(model: m))
         host.frame = NSRect(origin: .zero, size: lay.windowFrame.size)
@@ -190,6 +199,11 @@ final class VFNotify {
         p.setFrame(lay.windowFrame, display: false)
         p.ignoresMouseEvents = true
         p.orderFrontRegardless()
+        // Fensterserver zeigt es wirklich? Sonst frisches Fenster (siehe SpaceGuard.ensureShown, 10.10.2026)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            guard let self, let q = self.panel, q === p else { return }
+            self.panel = SpaceGuard.ensureShown(q, "Karte") { VFNotifyPanel() }
+        }
         // Nächster Durchlauf: erst dann federn (Startbild = Kapsel auf der Pille ist schon gezeichnet)
         DispatchQueue.main.async {
             withAnimation(.spring(response: 0.46, dampingFraction: 0.76)) { m.progress = 1 }
@@ -841,43 +855,5 @@ private struct VFPressStyle: ButtonStyle {
                 .scaleEffect(configuration.isPressed ? 0.97 : 1)
                 .onHover { hover = $0 }
         }
-    }
-}
-
-// MARK: - Vorschaubilder-Leiste in der Karte (bis 6, dann „+N“)
-
-struct VFThumbStrip: View {
-    let urls: [URL]
-    let more: Int
-    static let size: CGFloat = 36
-    static let height: CGFloat = 46        // Leiste + Abstand nach oben
-    /// Namenszeile(n) darunter: eine Zeile, ab ~46 Zeichen zwei
-    static func captionHeight(_ c: String?) -> CGFloat { c.map { $0.count > 46 ? 34 : 19 } ?? 0 }
-
-    var body: some View {
-        HStack(spacing: 5) {
-            ForEach(Array(urls.enumerated()), id: \.offset) { _, u in
-                ZStack {
-                    Color.white.opacity(0.08)
-                    if let img = NSImage(contentsOf: u) {
-                        Image(nsImage: img).resizable().interpolation(.high).aspectRatio(contentMode: .fill)
-                    } else {
-                        Image(nsImage: NSWorkspace.shared.icon(forFile: u.path)).resizable().aspectRatio(contentMode: .fit).padding(4)
-                    }
-                }
-                .frame(width: Self.size, height: Self.size)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Color.white.opacity(0.14), lineWidth: 1))
-            }
-            if more > 0 {
-                Text("+\(more)")
-                    .font(.system(size: 12.5, weight: .semibold)).monospacedDigit()
-                    .foregroundStyle(.white.opacity(0.85))
-                    .frame(minWidth: Self.size).frame(height: Self.size)
-                    .padding(.horizontal, 3)
-                    .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.white.opacity(0.10)))
-            }
-        }
-        .padding(.top, 10)
     }
 }

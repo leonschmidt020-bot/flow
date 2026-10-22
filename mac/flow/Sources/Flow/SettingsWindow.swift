@@ -4,8 +4,11 @@ import SwiftUI
 final class SettingsWindowController: NSObject, NSWindowDelegate {
     private var window: NSWindow?
     private let model = SettingsTabModel()
+    /// 18.10.2026: geschlossen liefen die 1,5-s-Timer der Reiter weiter → 60 s nach dem Schließen freigeben (RamHygiene.swift)
+    private let releaser = VFWindowReleaser()
 
     func show() {
+        releaser.cancel()
         if window == nil {
             let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 620, height: 560),
                              styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
@@ -25,6 +28,11 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         DispatchQueue.main.async { NSApp.setActivationPolicy(.accessory) }
+        releaser.schedule { [weak self] in
+            guard let self, let w = self.window, VFWindowReleaser.canDrop(w) else { return }
+            VFWindowReleaser.dismantle(w)
+            self.window = nil
+        }
     }
 }
 

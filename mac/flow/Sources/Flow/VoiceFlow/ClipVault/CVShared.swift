@@ -130,6 +130,7 @@ final class CVShared: ObservableObject {
             return
         }
         let pb = NSPasteboard.general
+        FlowPasteboard.noteOwnWrite()
         pb.clearContents()
         if let f = item.file { pb.writeObjects([f as NSURL]) }   // echte Datei (Finder, Mail, WhatsApp …)
         else if let u = item.image, let img = NSImage(contentsOf: u) { pb.writeObjects([img]) } else { pb.setString(item.text ?? "", forType: .string) }
@@ -169,9 +170,12 @@ final class CVFileSharedSource: SharedVaultSource {
     private func load(force: Bool) {
         let m = ClipVaultClient.mtime(jsonURL), sm = ClipVaultClient.mtime(base.appendingPathComponent("status.txt"))
         if !force && m == stamp && sm == statusStamp { return }
+        // ClipVault schreibt status.txt alle ~30 s neu – dann nur den Status lesen, nicht die ganze shared.json
+        // (447 KB, ~28 ms auf dem Main-Thread, gemessen 18.10.). Fehlt noch ein Bild (kommt nach dem Eintrag), weiter lesen.
+        let reparse = force || m != stamp || items.contains { $0.kind == .image && $0.image == nil }
         stamp = m; statusStamp = sm
-        var newItems: [SharedVaultItem] = []
-        if let data = try? Data(contentsOf: jsonURL),
+        var newItems: [SharedVaultItem] = reparse ? [] : items
+        if reparse, let data = try? Data(contentsOf: jsonURL),
            let o = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
            let arr = o["items"] as? [[String: Any]] {
             newItems = arr.compactMap { d -> SharedVaultItem? in

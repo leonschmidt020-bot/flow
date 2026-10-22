@@ -286,20 +286,49 @@ final class PCMSource: AudioSampleSource, @unchecked Sendable {
         return out
     }
 
-    /// Sprach-Sekunden (RMS > 0,01 in 30-ms-Fenstern) – wie MeetingProcessor.speechSeconds, aber ohne alles zu laden
-    func speechSeconds() -> Double {
+    /// Sprach-Sekunden (RMS > 0,01 in 30-ms-Fenstern) – wie MeetingProcessor.speechSeconds, aber ohne alles zu laden.
+    /// `gain`: so laut, wie Parakeet die Datei später hört (Transcriber.normalized) – 08.10.2026: leise Aufnahmen
+    /// (Handy weit weg, Spitze ~0,02) hatten fast keine Fenster über 0,01 und galten als „keine Sprache“, obwohl die
+    /// Erkennung sie nach dem Anheben (bis 24×) problemlos versteht. Gleiche Lehre wie 1.7.18 beim Meeting-Mikro.
+    func speechSeconds(gain: Float = 1) -> Double {
         let f = 480
         var n = 0
+        guard sampleCount >= f else { return 0 }
+        let thr = 0.01 / max(gain, 1)
         data.withUnsafeBytes { raw in
             let p = raw.bindMemory(to: Int16.self).baseAddress!
             var i = 0
             while i + f <= sampleCount {
                 var sum: Float = 0
                 for j in i..<(i + f) { let x = Float(Int16(littleEndian: p[j])) / 32768; sum += x * x }
-                if (sum / Float(f)).squareRoot() > 0.01 { n += 1 }
+                if (sum / Float(f)).squareRoot() > thr { n += 1 }
                 i += f
             }
         }
         return Double(n * f) / AudioDecoder.sampleRate
+    }
+
+    /// Verstärkung wie `Transcriber.normalized` (99,9-%-Spitze aus jedem 4. Sample → 0,7, höchstens 24×), aber über
+    /// die ganze Datei per Histogramm (kein Sortieren, kein Laden – auch für 3-h-Dateien ~1 s)
+    func normalizationGain() -> Float {
+        guard sampleCount > 100 else { return 1 }
+        var hist = [Int](repeating: 0, count: 32769)
+        var total = 0
+        data.withUnsafeBytes { raw in
+            let p = raw.bindMemory(to: Int16.self).baseAddress!
+            var i = 0
+            while i < sampleCount {
+                let v = Int(Int16(littleEndian: p[i]))
+                hist[min(32768, abs(v))] += 1
+                total += 1
+                i += 4
+            }
+        }
+        let want = Int(Double(total) * 0.999)
+        var acc = 0, peakIdx = 0
+        for (k, c) in hist.enumerated() { acc += c; if acc > want { peakIdx = k; break } }
+        let peak = Float(peakIdx) / 32768
+        guard peak > 1e-4 else { return 1 }
+        return min(0.7 / peak, 24)
     }
 }

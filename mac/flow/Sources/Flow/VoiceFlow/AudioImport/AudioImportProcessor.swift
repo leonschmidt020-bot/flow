@@ -87,7 +87,8 @@ enum AudioImportProcessor {
         var asrSeconds: Double
     }
 
-    enum Outcome { case done, cancelled, failed(String), decodeFailed(String), gone }
+    /// noSpeech: Datei lesbar, aber keine Sprache (Notiz bleibt mit „Nochmal versuchen“, Original bleibt liegen)
+    enum Outcome { case done, cancelled, failed(String), decodeFailed(String), noSpeech(String), gone }
 
     // MARK: Hauptablauf
 
@@ -135,13 +136,16 @@ enum AudioImportProcessor {
         if job.duration <= 0 { job.duration = source.seconds }
         if control.cancelled { return finishCancelled(&job) }
 
-        // Stille-Prüfung (billig, spart eine sinnlose Sprechertrennung)
-        if !job.diarized {
-            let speech = source.speechSeconds()
+        // Stille-Prüfung (billig, spart eine sinnlose Sprechertrennung) – so laut gemessen, wie Parakeet die Datei hört.
+        // „Nochmal versuchen“ (forceSpeech) überspringt sie: dann entscheidet die Erkennung selbst.
+        if !job.diarized && job.forceSpeech != true {
+            let gain = source.normalizationGain()
+            let speech = source.speechSeconds(gain: gain)
             if speech < 0.6 {
-                let msg = "In „\(job.fileName)“ ist keine Sprache zu hören."
-                job.phase = .failed; job.error = msg; save()
-                return .decodeFailed(msg)
+                let raw = gain > 1.05 ? source.speechSeconds() : speech
+                log(String(format: "Audiodatei %@: Stille-Prüfung – %.1f s Sprache (ohne Anheben %.1f s, Verstärkung %.1f×) von %.0f s",
+                           id, speech, raw, gain, source.seconds))
+                return noSpeech(&job, "In „\(job.fileName)“ ist keine Sprache zu hören.")
             }
         }
 
@@ -254,9 +258,17 @@ enum AudioImportProcessor {
             m.status = .done
             m.progressNote = nil
         }
+        // Kein einziges Wort erkannt → nicht als leere „fertige“ Notiz durchwinken, sondern klar sagen (mit Nochmal versuchen)
+        if finalSegments.isEmpty {
+            log(String(format: "Audiodatei %@: %.0f s Ton, aber kein Wort erkannt", id, job.duration))
+            return noSpeech(&job, job.forceSpeech == true
+                            ? "Auch beim zweiten Versuch hat Flow in „\(job.fileName)“ keine Wörter erkannt."
+                            : "In „\(job.fileName)“ hat Flow keine Wörter erkannt.")
+        }
         job.timings["total"] = Date().timeIntervalSince(t0) + (job.timings["previousRuns"] ?? 0)
         job.phase = .done
         job.error = nil
+        job.noSpeech = nil
         save()
         AudioImportFiles.removeScratch(id)
         let de = langs.filter { $0 == "de" }.count, en = langs.filter { $0 == "en" }.count
@@ -264,6 +276,17 @@ enum AudioImportProcessor {
                    id, job.duration, job.timings["total"] ?? 0, (job.timings["total"] ?? 0) / max(job.duration, 1), finalSegments.count, nChunks, de, en,
                    job.whisperCalls, job.whisperSeconds))
         return .done
+    }
+
+    /// Keine Sprache: Zwischenstände weg (spart Platz), Notiz + Original bleiben → „Nochmal versuchen“ dekodiert neu
+    private static func noSpeech(_ job: inout AudioImportJob, _ msg: String) -> Outcome {
+        job.phase = .failed; job.error = msg; job.noSpeech = true
+        job.decoded = false; job.diarized = false; job.chunks = []; job.chunksDone = 0
+        if FileManager.default.fileExists(atPath: AudioImportFiles.folder(job.id).path) {
+            AudioImportFiles.removeScratch(job.id)
+            AudioImportFiles.saveJob(job)
+        }
+        return .noSpeech(msg)
     }
 
     private static func finishCancelled(_ job: inout AudioImportJob) -> Outcome {

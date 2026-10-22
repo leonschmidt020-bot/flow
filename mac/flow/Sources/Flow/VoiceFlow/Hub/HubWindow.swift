@@ -82,10 +82,15 @@ final class VFHub: ObservableObject {
 final class VoiceFlowWindow: NSObject, NSWindowDelegate {
     static let shared = VoiceFlowWindow()
     private(set) var window: NSWindow?
+    /// 18.10.2026: Geschlossen blieb der ganze Hub (SwiftUI-Baum, Bilder in @State, Timer alle 2–5 s) für immer im Speicher.
+    /// Jetzt 60 s nach dem Schließen freigeben; wer vorher wieder öffnet, bekommt ihn sofort zurück.
+    let releaser = VFWindowReleaser()
+    static let frameName = "VoiceFlowHub"
 
     var isVisible: Bool { window?.isVisible ?? false }
 
     func show(_ section: VFSection? = nil) {
+        releaser.cancel()
         if let section { VFHub.shared.mode = .flow; VFHub.shared.go(section) }
         if window == nil { window = makeWindow() }
         HubSetupState.shared.refresh()
@@ -138,8 +143,8 @@ final class VoiceFlowWindow: NSObject, NSWindowDelegate {
         w.minSize = NSSize(width: 1000, height: 680)
         w.contentView = NSHostingView(rootView: VFHubView())
         w.delegate = self
-        if !w.setFrameUsingName("VoiceFlowHub") { w.centerOnMouseScreen() }
-        w.setFrameAutosaveName("VoiceFlowHub")
+        if !w.setFrameUsingName(Self.frameName) { w.centerOnMouseScreen() }
+        w.setFrameAutosaveName(Self.frameName)
         VFHub.shared.isFullScreen = w.styleMask.contains(.fullScreen)
         return w
     }
@@ -147,6 +152,23 @@ final class VoiceFlowWindow: NSObject, NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         VFHub.shared.showSettings = false
         DispatchQueue.main.async { NSApp.setActivationPolicy(.accessory) }
+        releaser.schedule { [weak self] in self?.releaseWindow() }
+    }
+
+    /// Fenster samt Inhalt loslassen; ClipVault-Takt und Bild-Zwischenspeicher gleich mit (nichts davon ist noch zu sehen).
+    /// Der Zustand (Seite, Modus, Auswahl) liegt in VFHub/CVHubState – show() baut das Fenster daraus neu.
+    private func releaseWindow() {
+        guard let w = window else { return }
+        guard VFWindowReleaser.canDrop(w) else {
+            if !w.isVisible { releaser.schedule { [weak self] in self?.releaseWindow() } }   // z. B. Blatt hängt noch dran
+            return
+        }
+        VFWindowReleaser.dismantle(w, autosaveName: Self.frameName)
+        window = nil
+        ClipVaultClient.shared.stop()
+        CVThumbs.shared.purge()
+        MCThumbCache.shared.purge()
+        log("Hub: \(Int(releaser.delay)) s nach dem Schließen freigegeben (Fenster, ClipVault-Takt, Bild-Zwischenspeicher)")
     }
 
     func windowDidBecomeKey(_ notification: Notification) {

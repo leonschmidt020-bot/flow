@@ -149,6 +149,8 @@ final class AudioImport: ObservableObject {
             AudioImportFiles.removeScratch(id)
             j.decoded = false; j.diarized = false; j.chunks = []; j.chunksDone = 0; j.whisperSeconds = 0; j.whisperCalls = 0; j.timings = [:]
         }
+        // „Neu auswerten“ nach „keine Sprache“ = nochmal ohne Stille-Prüfung
+        if j.noSpeech == true { j.forceSpeech = true; j.noSpeech = nil }
         j.resumes += 1
         j.phase = .queued; j.error = nil
         AudioImportFiles.saveJob(j)
@@ -243,7 +245,11 @@ final class AudioImport: ObservableObject {
         switch outcome {
         case .done:
             if let job, job.origin == .inbox { inbox?.moveDone(job) }
-            if let job, job.ownedCopy == true { adoptOwnedCopy(job) }
+            if let job, job.ownedCopy == true {
+                adoptOwnedCopy(job)
+                // 18.10.2026: übernommene Kopie (original.qta: 182 MB) im Hintergrund zu original.m4a (AAC mono, ~48 kbit/s)
+                MeetingAudioCompressor.shared.enqueue(id)
+            }
             let willSummarize = Settings.shared.autoSummary && !(MeetingStore.shared.meeting(id)?.segments.isEmpty ?? true)
             // Sofort melden (nicht erst nach der Zusammenfassung) – der Titel wird nachgereicht, sobald Claude fertig ist
             notifyDone(id, summarizing: willSummarize)
@@ -262,6 +268,15 @@ final class AudioImport: ObservableObject {
         case .failed(let msg):
             if var m = MeetingStore.shared.meeting(id) { m.status = .failed; m.progressNote = msg; MeetingStore.shared.save(m) }
             reportError(file: job?.fileName ?? "Datei", msg)
+        case .noSpeech(let msg):
+            // Notiz bleibt (Status „fehlgeschlagen“ + Hinweis), Original bleibt – „Nochmal versuchen“ prüft ohne Stille-Grenze
+            let again = job?.forceSpeech != true
+            if var m = MeetingStore.shared.meeting(id) {
+                m.status = .failed
+                m.progressNote = msg + (again ? " „Neu auswerten“ versucht es ohne Stille-Prüfung." : "")
+                MeetingStore.shared.save(m)
+            }
+            reportNoSpeech(id: id, file: job?.fileName ?? "Datei", msg, retry: again)
         case .decodeFailed(let msg):
             // Nichts Brauchbares in der Datei → keine leere Notiz zurücklassen, nur die Fehlerkarte
             if let job, job.origin == .inbox { inbox?.moveFailed(job) }
@@ -299,6 +314,37 @@ final class AudioImport: ObservableObject {
         m.progressNote = j.map(cancelledNote) ?? "Abgebrochen"
         MeetingStore.shared.save(m)
         log("Audiodatei \(id): abgebrochen")
+    }
+
+    /// „Keine Sprache gefunden“ – eigene Karte (nicht „Datei nicht lesbar“) mit „Nochmal versuchen“
+    func reportNoSpeech(id: String, file: String, _ message: String, retry: Bool) {
+        log("Audiodatei \(id): keine Sprache – \(message)")
+        errors.insert(ErrorCard(fileName: file, message: message), at: 0)
+        if errors.count > 3 { errors.removeLast(errors.count - 3) }
+        guard appMode else { return }
+        VFNotify.shared.show(Self.noSpeechNotice(message, retry: retry ? { AudioImport.shared.retryNoSpeech(id) } : nil))
+    }
+
+    static func noSpeechNotice(_ message: String, retry: (() -> Void)?) -> VFNotice {
+        VFNotice(id: "audiodatei_keine_sprache", title: "Keine Sprache gefunden",
+                 text: retry != nil ? message + " Nochmal ohne Stille-Prüfung?" : message,
+                 illustration: "illu_leer", fallbackSymbol: "waveform.slash",
+                 primary: retry.map { ("Nochmal versuchen", $0) } ?? ("OK", {}),
+                 secondary: retry != nil ? ("OK", {}) : nil,
+                 timeout: 25)
+    }
+
+    /// Nach „keine Sprache“: neu dekodieren, Stille-Prüfung überspringen, ganze Datei durch die Erkennung
+    func retryNoSpeech(_ id: String) {
+        guard var j = AudioImportFiles.loadJob(id) else { return }
+        guard FileManager.default.fileExists(atPath: j.source) else {
+            reportError(file: j.fileName, "Die Originaldatei „\(j.fileName)“ ist nicht mehr da – nochmal versuchen geht nur mit der Datei.")
+            return
+        }
+        j.forceSpeech = true
+        AudioImportFiles.saveJob(j)
+        log("Audiodatei \(id): nochmal versuchen ohne Stille-Prüfung")
+        resume(id)
     }
 
     func reportError(file: String, _ message: String) {

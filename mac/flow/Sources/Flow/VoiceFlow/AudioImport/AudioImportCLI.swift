@@ -12,6 +12,9 @@ import Foundation
 //   Flow --audio-import-inbox-test f.mp3 kaputt.mp3  Eingangsordner (FLOW_EINGANG=<Ordner>): annehmen, Erledigt/Nicht lesbar
 //   Flow --audio-export <id> <ordner>               md/txt/srt schreiben
 //   Flow --audio-import-render <ordner>             Sichtprüfung (Karte, Zeile, Notiz, Hub-Ablage, Pille, Meldungen)
+//   Flow --audio-import-robust-test <ordner>        Stabilität (08.10.2026) mit erzeugten Dateien aus <ordner>:
+//            sprache.wav, leise.wav (Spitze ~0,012), stille_vorn.wav (90 s Stille + Sprache), stille.wav, lang.wav,
+//            kaputt.mp3 – zwei Dateien auf einmal, eine dritte während die erste läuft, „keine Sprache“ + Nochmal versuchen
 
 enum AudioImportCLI {
     static func run(_ args: [String]) -> Int32? {
@@ -24,6 +27,7 @@ enum AudioImportCLI {
         case "--audio-export": return SelfTestCLI.guardedHome { export(args) }
         case "--audio-drop-test": return SelfTestCLI.guardedHome { wait { try await dropTest(args) } }
         case "--audio-import-render": return AudioImportRender.run(dir: args.count > 2 ? args[2] : "/tmp/audioimport-render")
+        case "--audio-import-robust-test": return SelfTestCLI.guardedHome { wait { try await robustTest(args) } }
         default: return nil
         }
     }
@@ -435,4 +439,86 @@ extension AudioImportCLI {
         }
         print("\(ok)/\(total) ok")
     }
+
+    // MARK: Stabilität (synthetische Dateien – nie Ton abspielen)
+
+    static func robustTest(_ args: [String]) async throws {
+        guard args.count > 2 else { print("Aufruf: --audio-import-robust-test <ordner mit erzeugten Dateien>"); return }
+        let dir = URL(fileURLWithPath: args[2], isDirectory: true)
+        func f(_ n: String) -> URL { dir.appendingPathComponent(n) }
+        var ok = 0, total = 0
+        func check(_ c: Bool, _ s: String) { total += 1; if c { ok += 1 }; print((c ? "ok      " : "FEHLER  ") + s) }
+        await MainActor.run { AudioImportSettings.shared.whisperAssist = false; Settings.shared.autoSummary = false }
+        await prepareEngines(whisper: false)
+
+        // 1) Stille-Prüfung: leise Aufnahme wie Parakeet sie hört (vorher: absolute Grenze → „keine Sprache“)
+        for (name, wantSpeech) in [("leise.wav", true), ("stille.wav", false), ("sprache.wav", true)] {
+            let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("robust-\(getpid())-\(name).pcm")
+            defer { try? FileManager.default.removeItem(at: tmp) }
+            _ = try AudioDecoder.decode(f(name), to: tmp)
+            let src = try PCMSource(tmp)
+            let raw = src.speechSeconds(), g = src.normalizationGain(), now = src.speechSeconds(gain: g)
+            print(String(format: "        %@: Sprache ohne Anheben %.1f s (alte Prüfung %@), mit Anheben ×%.1f %.1f s", name, raw,
+                         raw < 0.6 ? "„keine Sprache“" : "ok", g, now))
+            check((now >= 0.6) == wantSpeech, "\(name): Stille-Prüfung \(wantSpeech ? "lässt durch" : "hält an")")
+        }
+
+        // 2) zwei Dateien auf einmal + eine dritte, während die erste läuft (wie Ziehen auf die Pille)
+        let first = await MainActor.run { AudioImport.shared.open([f("leise.wav"), f("stille_vorn.wav")], origin: .drop) }
+        check(first.count == 2, "zwei Dateien auf einmal angenommen (\(first.count))")
+        while await MainActor.run(body: { AudioImport.shared.runningID == nil }) { try? await Task.sleep(nanoseconds: 20_000_000) }
+        let more = await MainActor.run { AudioImport.shared.open([f("sprache.wav"), f("kaputt.mp3"), f("stille.wav")], origin: .drop) }
+        let dup = await MainActor.run { AudioImport.shared.open([f("stille_vorn.wav")], origin: .drop) }
+        check(more.count == 3, "während der Auswertung: 3 weitere in der Schlange (\(more.count))")
+        check(dup.isEmpty, "dieselbe Datei nochmal, solange sie wartet → nicht doppelt")
+        let waitingNow = await MainActor.run { AudioImport.shared.waiting.count }
+        check(waitingNow >= 3, "Schlange: \(waitingNow) warten, eine läuft")
+        await waitIdle(showProgress: false)
+        let ids = first + more
+        for (id, name) in zip(ids, ["leise.wav", "stille_vorn.wav", "sprache.wav", "kaputt.mp3", "stille.wav"]) {
+            let j = AudioImportFiles.loadJob(id)
+            let m = await MainActor.run { MeetingStore.shared.meeting(id) }
+            let words = m?.segments.map { $0.text.split(separator: " ").count }.reduce(0, +) ?? 0
+            if name == "kaputt.mp3" {
+                check(m == nil && j == nil, "\(name): keine leere Notiz zurückgelassen")
+            } else if name == "stille.wav" {
+                check(j?.phase == .failed && j?.noSpeech == true && m?.status == .failed,
+                      "\(name): „keine Sprache“ – Notiz bleibt mit Hinweis (\(m?.status.rawValue ?? "?"))")
+                check(!FileManager.default.fileExists(atPath: AudioImportFiles.pcmURL(id).path), "\(name): Zwischendatei weggeräumt")
+            } else {
+                check(j?.phase == .done && m?.status == .done && words >= 5,
+                      "\(name): fertig, \(m?.segments.count ?? 0) Abschnitte, \(words) Wörter (\(j?.phase.rawValue ?? "?"))")
+            }
+        }
+        let err = await MainActor.run { AudioImport.shared.errors.map(\.message) }
+        check(err.contains { $0.contains("kaputt.mp3") && ($0.contains("beschädigt") || $0.contains("keine Audio")) } || err.contains { $0.contains("kaputt.mp3") },
+              "kaputte Datei: klare Fehlermeldung")
+        // 3) „Nochmal versuchen“ nach „keine Sprache“: ohne Stille-Prüfung, danach kein weiteres Angebot
+        let silentID = more.count > 2 ? more[2] : ""
+        await MainActor.run { AudioImport.shared.retryNoSpeech(silentID) }
+        await waitIdle(showProgress: false)
+        let j2 = AudioImportFiles.loadJob(silentID)
+        let m2 = await MainActor.run { MeetingStore.shared.meeting(silentID) }
+        check(j2?.forceSpeech == true && j2?.noSpeech == true && m2?.status == .failed && !(m2?.progressNote ?? "").contains("Neu auswerten"),
+              "Nochmal versuchen: ganze Datei durch die Erkennung, dann klar „keine Wörter“ (\(m2?.progressNote ?? "-"))")
+        let card = AudioImport.noSpeechNotice("x", retry: {})
+        check(card.title == "Keine Sprache gefunden" && card.primary?.0 == "Nochmal versuchen", "Karte „Keine Sprache gefunden“ mit „Nochmal versuchen“")
+
+        // 4) lange Datei: Speicher bleibt klein (mmap), Stücke
+        if FileManager.default.fileExists(atPath: f("lang.wav").path) {
+            let peak = Peak(); let sam = sampler(peak)
+            let base = MemProbe.snap().footprintMB
+            let t0 = Date()
+            let lid = await MainActor.run { AudioImport.shared.open([f("lang.wav")], origin: .cli) }.first ?? ""
+            await waitIdle(showProgress: false)
+            peak.run = false; _ = await sam.value
+            let j = AudioImportFiles.loadJob(lid)
+            check(j?.phase == .done && (j?.chunks.count ?? 0) >= 3,
+                  String(format: "lange Datei: %.0f s in %.1f s, %d Stücke, Speicher +%.0f MB", j?.duration ?? 0, Date().timeIntervalSince(t0),
+                         j?.chunks.count ?? 0, peak.appFootprint - base))
+        }
+        print("\(ok)/\(total) ok")
+        if ok != total { throw AudioImportError(message: "\(total - ok) Prüfung(en) fehlgeschlagen") }
+    }
+
 }

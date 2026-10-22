@@ -42,6 +42,7 @@ enum Inserter {
             return .copiedOnly(reason: "Passwortfeld – 30 s in Zwischenablage")
         }
         let saved = Settings.shared.keepInClipboard ? nil : snapshot(pb)
+        FlowPasteboard.noteOwnWrite()
         pb.clearContents()
         pb.setString(text, forType: .string)
         pb.setString(source, forType: clipVaultSource)
@@ -94,7 +95,9 @@ enum Inserter {
     }
 
     private static func snapshot(_ pb: NSPasteboard) -> [[NSPasteboard.PasteboardType: Data]] {
-        (pb.pasteboardItems ?? []).map { item in
+        // Bildschirmaufnahme „Mit Kontext“: Versprechen nicht abwarten, nur merken (ScreenRecClip)
+        if let m = ScreenRecClip.snapshotMarker(pb) { return m }
+        return (pb.pasteboardItems ?? []).map { item in
             var d: [NSPasteboard.PasteboardType: Data] = [:]
             for t in item.types { if let v = item.data(forType: t) { d[t] = v } }
             return d
@@ -103,6 +106,8 @@ enum Inserter {
 
     private static func restore(_ items: [[NSPasteboard.PasteboardType: Data]], into pb: NSPasteboard) {
         guard !items.isEmpty else { return }
+        if ScreenRecClip.restore(items, into: pb) { return }
+        FlowPasteboard.noteOwnWrite()      // zurückgelegter Inhalt ist keine neue Kopie
         pb.clearContents()
         pb.writeObjects(items.map { d in
             let it = NSPasteboardItem()
@@ -113,6 +118,7 @@ enum Inserter {
 
     /// Nur kopieren (z. B. Meeting-Transkript), mit ClipVault-Quelle.
     static func copy(_ text: String, source: String = "Diktat") {
+        FlowPasteboard.noteOwnWrite()
         let pb = NSPasteboard.general
         pb.clearContents()
         pb.setString(text, forType: .string)

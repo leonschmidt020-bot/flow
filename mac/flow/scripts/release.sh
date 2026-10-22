@@ -19,6 +19,7 @@
 #   3 Wort-Lerner      CorrectionLearner + AliasLearner (Fälle aus der Geschichte) · Maus-Ziel-Logik (--selftest-mouse-target) ·
 #                      Agent-Prompt (--selftest-agent-prompt: Auslöser, Erkennung, Regel-Rückfall, Schein-Claude, Verlauf, Original zuerst, ohne Claude-CLI,
 #                      Ersetzen beim „Einfügen“ mit Schein-Box/-Feld, „abgeschickt?“) · --agent-prompt-latency (Einfügen → Karte < 1 s) ·
+#                      --pill-hover-test (Pille überfahren, alle Bildschirme) · --shared-inbox-geometry ·
 #                      Bildschirmaufnahme (--screen-rec-test: Ton-Wahl, Datei, Karten, Transkript-Sätze, Schlüsselbilder, Mausspur)
 #   3b Oberfläche      --pill-ring-render, --shared-inbox-render, --update-badge-render (+ Fehler-Karte), --agent-prompt-render
 #                      (alle Karten-Zustände), --screen-rec-render (Aufnahme-Karten) (+ --render-hub im vollen Lauf)
@@ -204,10 +205,32 @@ if [ $BUILD_OK -eq 1 ] && [ -d "$APP" ]; then
   echo "$rb" > "$T/rollback.out"
   check "$rc" "Rückweg-Logik gegen eine Schein-App im Temp-Ordner (tests/lib/rollback_test.sh)" "$(echo "$rb" | tail -1)"
   { echo "$rb" | grep "FEHLER" || true; } | while IFS= read -r l; do row FAIL "$(echo "$l" | sed 's/^ *FEHLER *//')"; done
+  # Projekt umgezogen (iCloud → ~/Developer): alter Bauordner wird beiseitegelegt statt den Build zu brechen (18.10.)
+  set +e; mb="$(with_timeout 30 bash tests/lib/moved_build_test.sh 2>&1)"; rc=$?; set -e
+  check "$rc" "Umgezogener Bauordner heilt sich selbst (tests/lib/moved_build_test.sh)" "$(echo "$mb" | tail -1)"
+  { echo "$mb" | grep "FEHLER" || true; } | while IFS= read -r l; do row FAIL "$(echo "$l" | sed 's/^ *FEHLER *//')"; done
   # Lebenszeichen + Absturz-Erkennung der App, und dass das Health-Gate (plutil) liest, was die App schreibt
   set +e; hs="$(FLOW_HOME="$T/h-health" with_timeout 30 "$BIN" --selftest-health 2>&1)"; rc=$?; set -e
   check "$rc" "health.json: Heartbeat, unsauberes Ende, Absturzberichte (--selftest-health)" "$(echo "$hs" | tail -1)"
   { echo "$hs" | grep "FEHLER" || true; } | while IFS= read -r l; do row FAIL "$(echo "$l" | sed 's/^ *FEHLER *//')"; done
+  # Diktat-Sicherung: Mitschreiben alle 2 s, Absturz-Rest → WAV, Abbruch-Status, Aufräumen (30/14 Tage)
+  set +e; bk="$(FLOW_HOME="$T/h-backup" with_timeout 30 "$BIN" --selftest-backup 2>&1)"; rc=$?; set -e
+  check "$rc" "Diktat-Sicherung: nichts Gesagtes geht verloren (--selftest-backup)" "$(echo "$bk" | tail -1)"
+  { echo "$bk" | grep "FEHLER" || true; } | while IFS= read -r l; do row FAIL "$(echo "$l" | sed 's/^ *FEHLER *//')"; done
+  # Effizienz-Durchgang 18.10.: Wörterbuch-Fehlauslöser, Mac-Ton-Tap ohne Dauer-Neuaufbau, Update-Takt
+  set +e; ef="$(FLOW_HOME="$T/h-eff" with_timeout 30 "$BIN" --selftest-effizienz 2>&1)"; rc=$?; set -e
+  check "$rc" "Effizienz: kein Whisper für Alltagswörter, kein Tap-Neuaufbau in Stille (--selftest-effizienz)" "$(echo "$ef" | tail -1)"
+  { echo "$ef" | grep "FEHLER" || true; } | while IFS= read -r l; do row FAIL "$(echo "$l" | sed 's/^ *FEHLER *//')"; done
+  # Durchgang 18.10. (2): Meeting-Ton als AAC, Log-Pflege, Aufnahme-Schutz, RAM (Caches/Fenster)
+  for st in "--selftest-meeting-audio|Meeting-Ton wird geprüft komprimiert (AAC), Original erst danach weg" \
+            "--selftest-logs|Logs: stderr behält das Ende, flow.log nur bei Bedarf neu (5 MB Deckel)" \
+            "--selftest-aufnahme-schutz|Bildschirmaufnahme: Start-Nummern, Platz-Wächter, Abbau, kaputte Datei erkannt" \
+            "--selftest-ram|RAM: Bild-Caches mit Deckel, geschlossene Fenster werden freigegeben"; do
+    flag="${st%%|*}"; label="${st#*|}"
+    set +e; so="$(FLOW_HOME="$T/h${flag//-/}" with_timeout 60 "$BIN" "$flag" 2>&1)"; rc=$?; set -e
+    check "$rc" "$label ($flag)" "$(echo "$so" | tail -1)"
+    { echo "$so" | grep "FEHLER" || true; } | while IFS= read -r l; do row FAIL "$(echo "$l" | sed 's/^ *FEHLER *//')"; done
+  done
   hp="$(plutil -extract pid raw -o - "$T/h-health/health.json" 2>/dev/null || true)"
   hb="$(plutil -extract lastHeartbeat raw -o - "$T/h-health/health.json" 2>/dev/null || true)"
   check "$([ -n "$hp" ] && [ -n "$hb" ] && echo 0 || echo 1)" "Health-Gate liest die health.json der App (plutil)" "pid ${hp}, lastHeartbeat ${hb%%.*}"
@@ -287,6 +310,15 @@ if [ $BUILD_OK -eq 1 ]; then
   echo "$ao" > "$T/agent-prompt.out"
   check "$rc" "Agent-Prompt (--selftest-agent-prompt)" "$(echo "$ao" | tail -1)"
   { echo "$ao" | grep "FEHLER" || true; } | while IFS= read -r l; do row FAIL "Agent-Prompt: $(echo "$l" | sed 's/^ *FEHLER *//')"; done
+  # Pille überfahren (08.10.2026): von JEDER Stelle der ruhenden Pille öffnet „Neu von …“, kein Hover-Flackern;
+  # Lage der Liste auf allen Bildschirm-Anordnungen (< 5 s zusammen)
+  for t in "pill-hover-test:Pille überfahren (Hysterese, alle Bildschirme)" "shared-inbox-geometry:Lage der Neu-Liste (alle Anordnungen)" \
+           "space-guard-test:Fenster auf allen Schreibtischen (hängendes neu anlegen)"; do
+    flag="${t%%:*}"; label="${t#*:}"
+    set +e; to="$(FLOW_HOME="$T/h-$flag" CLIPVAULT_HOME="$T/cv-$flag" with_timeout 60 "$BIN" "--$flag" 2>&1)"; rc=$?; set -e
+    echo "$to" > "$T/$flag.out"
+    check "$rc" "$label (--$flag)" "$(echo "$to" | tail -1)"
+  done
   # Vorschlags-Karte: Einfügen → lesbar (offscreen gemessen, Exit 0 nur unter 1 s)
   set +e
   lo="$(FLOW_HOME="$T/h-aplat" with_timeout 60 "$BIN" --agent-prompt-latency 2>&1)"; rc=$?

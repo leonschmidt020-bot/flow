@@ -75,8 +75,11 @@ final class MainNav: ObservableObject {
 final class MainWindowController: NSObject, NSWindowDelegate {
     static let shared = MainWindowController()
     private var window: NSWindow?
+    /// 18.10.2026: geschlossen liefen die Timer der Seiten (1,5/2 s) weiter → 60 s nach dem Schließen freigeben (RamHygiene.swift)
+    private let releaser = VFWindowReleaser()
 
     func show(_ section: MainSection? = nil) {
+        releaser.cancel()
         if let section { MainNav.shared.section = section }
         if window == nil {
             let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1120, height: 740),
@@ -104,6 +107,11 @@ final class MainWindowController: NSObject, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         DispatchQueue.main.async { NSApp.setActivationPolicy(.accessory) }
+        releaser.schedule { [weak self] in
+            guard let self, let w = self.window, VFWindowReleaser.canDrop(w) else { return }
+            VFWindowReleaser.dismantle(w, autosaveName: "FlowMain")
+            self.window = nil
+        }
     }
 }
 

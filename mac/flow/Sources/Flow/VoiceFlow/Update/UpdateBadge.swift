@@ -88,9 +88,9 @@ final class UpdateBadge {
         let m = NSEvent.mouseLocation
         let onDot = (dot?.isVisible == true ? dot!.frame : .zero).insetBy(dx: -5, dy: -5).contains(m)
         // Die Pille selbst nur, wenn weder Neues vom Partner noch Vorschläge warten
-        let onPill = pill.insetBy(dx: -6, dy: -6).contains(m) && PillRing.shared.current == .update
+        let onPill = VFNotify.shared.mouseOnPill(pill, m) && PillRing.shared.current == .update
         if isOpen {
-            let inside = onDot || pill.insetBy(dx: -6, dy: -6).contains(m) || (card?.frame.insetBy(dx: -6, dy: -6).contains(m) ?? false)
+            let inside = onDot || VFNotify.shared.mouseOnPill(pill, m) || (card?.frame.insetBy(dx: -6, dy: -6).contains(m) ?? false)
             if inside { leftSince = nil } else {
                 if leftSince == nil { leftSince = Date() }
                 if Date().timeIntervalSince(leftSince!) > 0.6 { closeCard() }
@@ -126,7 +126,7 @@ final class UpdateBadge {
     func openCard() {
         guard !isOpen, pending != nil, let pill = VFNotify.shared.pillAnchor?() else { return }
         SharedInboxBadge.shared.closeList(); SmartPillBadge.shared.closeList()
-        let p = card ?? SmartBadgePanel(size: NSSize(width: UpdateBadge.width, height: 150), acceptsMouse: true)
+        let p = SpaceGuard.fresh(card, "Update") ?? SmartBadgePanel(size: NSSize(width: UpdateBadge.width, height: 150), acceptsMouse: true)
         card = p
         p.contentView = VFNotifyHostingView(rootView: UpdateBadgeCard(model: model))
         model.appeared = false
@@ -135,6 +135,11 @@ final class UpdateBadge {
         let scr = VFNotify.screen(containing: NSPoint(x: pill.midX, y: pill.midY)) ?? NSScreen.main
         p.setFrame(SmartPillBadge.listFrame(size: size, pill: pill, visible: scr?.visibleFrame ?? pill.insetBy(dx: -600, dy: -400)), display: true)
         p.orderFrontRegardless()
+        // Fensterserver zeigt es wirklich? Sonst frisches Fenster (siehe SpaceGuard.ensureShown, 10.10.2026)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            guard let self, let q = self.card, q === p else { return }
+            self.card = SpaceGuard.ensureShown(q, "Update") { SmartBadgePanel(size: NSSize(width: UpdateBadge.width, height: 150), acceptsMouse: true) }
+        }
         DispatchQueue.main.async { withAnimation(.spring(response: 0.36, dampingFraction: 0.82)) { self.model.appeared = true } }
         leftSince = nil
         startTimer()

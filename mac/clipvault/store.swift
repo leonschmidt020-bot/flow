@@ -56,7 +56,7 @@ final class Store {
     static let shared = Store()
     private(set) var items: [ClipItem] = []
     var collections: [Collection] = []
-    let dir: URL; let maxItems = 200; let maxAge: TimeInterval = 2*24*3600
+    let dir: URL; let maxItems = 500; let maxAge: TimeInterval = 3*24*3600  // 01.11.2026: 3 Tage, Deckel 500, damit 3 Tage auch reinpassen
     static let secretTTL: TimeInterval = 24*3600
     init() {
         let base = URL(fileURLWithPath: CV_DIR, isDirectory: true)
@@ -225,9 +225,9 @@ final class Store {
             if it.pinned { return false }                                   // angeheftet -> nie
             if let exp = secretExpiry(it) { return exp < now }              // Passwort-Bereich -> 24 h
             if it.collection != nil { return false }                        // anderer Bereich -> nie
-            return it.date < cutoff                                         // Verlauf -> 2 Tage
+            return it.date < cutoff                                         // Verlauf -> 3 Tage
         }
-        let keep: (ClipItem) -> Bool = { $0.pinned || $0.collection != nil }  // zaehlen nicht zum 200er-Deckel
+        let keep: (ClipItem) -> Bool = { $0.pinned || $0.collection != nil }  // zaehlen nicht zum Deckel
         for it in items where expired(it) { removeStorage(it) }
         items.removeAll { expired($0) }
         if items.count > maxItems {
@@ -276,7 +276,7 @@ final class Store {
         }
         let itemID = UUID().uuidString
         let filesDir = dir.appendingPathComponent("files/\(itemID)")
-        let cap: Int64 = 200 * 1024 * 1024  // bis 200 MB pro Datei in den Verlauf kopieren (ueberlebt 2 Tage)
+        let cap: Int64 = 200 * 1024 * 1024  // bis 200 MB pro Datei in den Verlauf kopieren (ueberlebt 3 Tage)
         var refs: [FileRef] = []
         for (i, u) in urls.enumerated() {
             let name = URL(fileURLWithPath: origs[i]).lastPathComponent

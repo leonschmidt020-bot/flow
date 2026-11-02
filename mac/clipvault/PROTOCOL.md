@@ -63,7 +63,7 @@ beim Anzeigen nach oben gezogen, stehen in der Datei aber an ihrer Zeitposition)
 - Typ-Filter: Text = `text` ohne reine URL · Bilder = `image` · Links = `text` mit Badge `link` · Dateien = `file`.
 - Suche: `text`, `ocrText` und `files[].name`, Groß/Klein egal.
 
-**Aufbewahrung:** Verlauf 2 Tage und max. 200 Einträge · angeheftet oder in einem Bereich = kein Ablauf ·
+**Aufbewahrung:** Verlauf 3 Tage und max. 500 Einträge · angeheftet oder in einem Bereich = kein Ablauf ·
 Geheim-Bereich: nach 24 h ab `collectedAt` gelöscht, außer `pinned`.
 
 ## 3. `collections.json` — Bereiche

@@ -46,7 +46,8 @@ ist. Dazu kommt **ClipVault**, ein Zwischenablage-Verlauf (⌘⇧V). Beide laufe
 **ClipVault (Zwischenablage)**
 - ⌘⇧V öffnet den Verlauf dort, wo die Maus ist: Text, Links (mit Vorschau), Bilder (mit Texterkennung), Dateien.
   Oder: über die ruhende Pille fahren → kleiner Knopf darunter öffnet den Verlauf.
-- Anheften und Bereiche (Sammlungen), zwei Tage / 200 Einträge Verlauf, Doppelte werden zusammengefasst.
+- Anheften und Bereiche (Sammlungen), drei Tage / 500 Einträge Verlauf, Doppelte werden zusammengefasst.
+- Statistik im Hub (ClipVault → Statistik): Kopien pro Tag, Arten, Apps, Uhrzeiten – nur Zahlen, keine Inhalte.
 - Optional: **einen Tresor mit einem Freund/Partner teilen** – Ende-zu-Ende verschlüsselt über deinen *eigenen*
   kostenlosen Cloudflare Worker ([Anleitung, 5 Minuten](clipvault/sync-worker/README.md)). Standard: aus.
 

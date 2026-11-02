@@ -1304,6 +1304,7 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         Toast.shared.show("Auswahl kopiert")
     }
     func copyItemStay(_ it: ClipItem) {
+        CVStats.shared.recordReuse()
         let pb = NSPasteboard.general; pb.clearContents()
         switch it.kind {
         case .text: pb.setString(it.text ?? "", forType: .string)

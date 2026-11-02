@@ -137,6 +137,7 @@ enum MultiCopy {
                     let img = imageExts.contains(u.pathExtension.lowercased())
                     p.items.append(PasteItemPlan(fileURL: u, pngFile: nil, string: nil))
                     paths.append(cvShellEscape(u.path))
+                    if let c = recordingContext(u) { texts.append(c) }
                     if img { p.images += 1 } else { p.files += 1 }
                 }
             case .text(let t):
@@ -160,8 +161,20 @@ enum MultiCopy {
         guard !ok.isEmpty else { return false }
         var p = PastePlan()
         p.items = ok.map { PasteItemPlan(fileURL: $0, pngFile: nil, string: nil) }
-        p.items[0].string = ok.map { cvShellEscape($0.path) }.joined(separator: " ")
+        p.items[0].string = ([ok.map { cvShellEscape($0.path) }.joined(separator: " ")] + ok.compactMap(recordingContext))
+            .joined(separator: "\n\n")
         return write(p, to: pb)
+    }
+    /// 26.10.2026 (Bildschirmaufnahme aus dem Verlauf kopiert → in Claude Code kam nur der Pfad, der Kontext fehlte):
+    /// Flow legt den Kontext einer Aufnahme (Gesagtes, Klicks, Bilder) als
+    /// „<Video> – Bilder/Kontext.txt“ ab → beim Kopieren des Videos kommt er wie bei „Mit Kontext“ unter den Pfad.
+    static func recordingContext(_ u: URL) -> String? {
+        guard ["mp4", "mov", "m4v"].contains(u.pathExtension.lowercased()) else { return nil }
+        let f = URL(fileURLWithPath: u.deletingPathExtension().path + " – Bilder").appendingPathComponent("Kontext.txt")
+        guard let a = try? FileManager.default.attributesOfItem(atPath: f.path), ((a[.size] as? NSNumber)?.intValue ?? 0) < 2_000_000,
+              let t = try? String(contentsOf: f, encoding: .utf8) else { return nil }
+        let c = t.trimmingCharacters(in: .whitespacesAndNewlines)
+        return c.isEmpty ? nil : c
     }
     /// Plan auf eine Zwischenablage schreiben (allgemeine ODER eigene Test-Zwischenablage)
     @discardableResult static func write(_ plan: PastePlan, to pb: NSPasteboard) -> Bool {
@@ -392,6 +405,18 @@ func runMultiSelectTest() -> Never {
               && (pb.readObjects(forClasses: [NSURL.self], options: nil) as? [URL] ?? []).count == 2
               && pb.string(forType: .string) == cvShellEscape(z.path) + " " + cvShellEscape(z2.path))
         check("fehlende Datei: nichts geschrieben", !MultiCopy.writeFiles([dir.appendingPathComponent("weg.zip")], to: pb))
+        // Bildschirmaufnahme mit gespeichertem Kontext (26.10.)
+        let v = dir.appendingPathComponent("Bildschirmaufnahme 1.mp4"), v2 = dir.appendingPathComponent("ohne.mp4")
+        FileManager.default.createFile(atPath: v.path, contents: Data([0])); FileManager.default.createFile(atPath: v2.path, contents: Data([0]))
+        let bilder = URL(fileURLWithPath: v.deletingPathExtension().path + " – Bilder")
+        try? FileManager.default.createDirectory(at: bilder, withIntermediateDirectories: true)
+        try? "Bildschirmaufnahme (0:10) – was ich sage:\n[0:00] Hallo.\n".write(to: bilder.appendingPathComponent("Kontext.txt"), atomically: true, encoding: .utf8)
+        check("Aufnahme: Pfad + Kontext als Text", MultiCopy.writeFiles([v], to: pb)
+              && pb.string(forType: .string) == cvShellEscape(v.path) + "\n\nBildschirmaufnahme (0:10) – was ich sage:\n[0:00] Hallo.")
+        check("Aufnahme: Video-Datei bleibt echte URL", (pb.readObjects(forClasses: [NSURL.self], options: nil) as? [URL] ?? []).map(\.path) == [v.path])
+        check("Aufnahme ohne Kontext-Datei: nur Pfad", MultiCopy.writeFiles([v2], to: pb) && pb.string(forType: .string) == cvShellEscape(v2.path))
+        let mp = MultiCopy.plan([.files([v, z])], exportDir: dir.appendingPathComponent("exp"))
+        check("Mehrfachauswahl mit Aufnahme: Kontext unter den Pfaden", mp.text.hasSuffix("[0:00] Hallo.") && mp.text.hasPrefix(cvShellEscape(v.path)))
         pb.releaseGlobally(); try? FileManager.default.removeItem(at: dir)
     }
     print(fails == 0 ? "ALLE \(n) PRUEFUNGEN OK" : "\(fails) VON \(n) FEHLGESCHLAGEN")

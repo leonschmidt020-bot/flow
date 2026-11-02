@@ -102,6 +102,20 @@ final class ScreenRecClip: NSObject, NSPasteboardItemDataProvider {
 
     // MARK: Text, wie er eingefügt wird
 
+    /// 26.10.2026 (Aufnahme aus dem ClipVault-Verlauf kopiert → der Kontext fehlte): der fertige
+    /// Kontext liegt zusätzlich neben den Bildern als „<Video> – Bilder/Kontext.txt“. ClipVault hängt ihn beim Kopieren
+    /// der Video-Datei an den Text (multiselect.swift, `MultiCopy.recordingContext`).
+    static func contextFile(for url: URL) -> URL {
+        URL(fileURLWithPath: url.deletingPathExtension().path + " – Bilder", isDirectory: true).appendingPathComponent("Kontext.txt")
+    }
+
+    static func saveContext(_ url: URL, _ text: String) {
+        guard !text.isEmpty else { return }
+        let f = contextFile(for: url)
+        try? FileManager.default.createDirectory(at: f.deletingLastPathComponent(), withIntermediateDirectories: true)
+        do { try text.write(to: f, atomically: true, encoding: .utf8) } catch { log("Bildschirmaufnahme: Kontext nicht gespeichert (\(error.localizedDescription))") }
+    }
+
     static func text(_ url: URL, context: String?) -> String {
         var t = CVPickSet.shellEscape(url.path)
         if let c = context, !c.isEmpty { t += "\n\n" + c }

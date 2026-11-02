@@ -35,6 +35,7 @@ struct CVRootPage: View {
         case .bereiche:
             if let id = state.openCollection { CVBrowsePage(scope: .collection(id)) } else { CVCollectionsPage() }
         case .geteilt: CVSharedPage()
+        case .statistik: CVStatsPage()
         case .einstellungen: CVSettingsPage()
         }
     }
@@ -324,7 +325,7 @@ struct CVBrowsePage: View {
     private var banner: some View {
         let stats = "\(cv.items.count) Einträge, \(cv.items.filter(\.pinned).count) angeheftet"
         return CVBanner(headline: "Alles, was du *kopierst*, an einem Ort.",
-                        sub: "Zwei Tage lang alles, Angeheftetes und Bereiche für immer · \(stats)",
+                        sub: "Drei Tage lang alles, Angeheftetes und Bereiche für immer · \(stats)",
                         onClose: { withAnimation { bannerHidden = true } }) {
             Button("Bereiche ansehen") { state.go(.bereiche) }.buttonStyle(HubBannerButton())
             HStack(spacing: 5) {

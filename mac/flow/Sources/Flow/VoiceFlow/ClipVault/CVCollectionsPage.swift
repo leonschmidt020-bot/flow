@@ -53,7 +53,7 @@ struct CVCollectionsPage: View {
             Button("Löschen", role: .destructive) { if let d = deleting { cv.deleteCollection(d) }; deleting = nil }
             Button("Abbrechen", role: .cancel) { deleting = nil }
         } message: {
-            Text("Die \(deleting.map { cv.count(in: $0.id) } ?? 0) Einträge darin wandern zurück in den Verlauf – ClipVault löscht sie dann nach zwei Tagen.")
+            Text("Die \(deleting.map { cv.count(in: $0.id) } ?? 0) Einträge darin wandern zurück in den Verlauf – ClipVault löscht sie dann nach drei Tagen.")
         }
         .onAppear {
             if Self.requestCreate { Self.requestCreate = false; editing = CVCollectionDraft(existing: nil) }

@@ -1147,6 +1147,7 @@ final class ScreenRecDone {
             let text = ScreenRecKeyframes.compose(duration: dur, screen: screen, sound: sound, segments: segs, frames: frames, trails: trails,
                                                   clicks: infos, marks: marks, switches: sw, markCrops: crops)
             ScreenRecClip.finish(url, context: text)   // wartendes ⌘V sofort beliefern – ohne Umweg über den Hauptfaden
+            ScreenRecClip.saveContext(url, text)       // … und für späteres Kopieren aus ClipVault neben die Bilder
             await MainActor.run {
                 self.trails = trails
                 self.keyframes = frames

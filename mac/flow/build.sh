@@ -207,8 +207,26 @@ if [ -f "$CTRL_SRC" ]; then
       mkdir -p "$EXT/Contents/Resources"; cp -R .build/flowcontrols/meta/Metadata.appintents "$EXT/Contents/Resources/"
       # frisch erzeugte Fassung auch ins Repo (Macs ohne volles Xcode haben appintentsmetadataprocessor nicht) –
       # NUR bei der Veröffentlichung (release.sh setzt FLOW_UPDATE_METADATA): sonst wäre das Repo nach jedem Bau „verändert“
-      if [ -n "${FLOW_UPDATE_METADATA:-}" ] && ! diff -rq .build/flowcontrols/meta/Metadata.appintents Extensions/FlowControls/Metadata.appintents >/dev/null 2>&1; then
-        rm -rf Extensions/FlowControls/Metadata.appintents; cp -R .build/flowcontrols/meta/Metadata.appintents Extensions/FlowControls/
+      # Vergleich nach INHALT: das Werkzeug schreibt version.json mal mit „version“, mal mit „toolsVersion“ zuerst –
+      # ein Byte-Vergleich sah jedes Mal eine Änderung. Und Dateien einzeln überschreiben statt Ordner löschen + neu
+      # kopieren: in einem iCloud-Dokumentenordner entstehen sonst Doppel wie „extract 2.actionsdata“.
+      if [ -n "${FLOW_UPDATE_METADATA:-}" ] && ! /usr/bin/python3 - .build/flowcontrols/meta/Metadata.appintents Extensions/FlowControls/Metadata.appintents <<'METAPY'
+import json, os, sys
+a, b = sys.argv[1], sys.argv[2]
+names = lambda d: sorted(f for f in os.listdir(d) if not f.startswith('.')) if os.path.isdir(d) else None
+if names(a) != names(b): sys.exit(1)
+for f in names(a):
+    x, y = open(os.path.join(a, f), 'rb').read(), open(os.path.join(b, f), 'rb').read()
+    if x == y: continue
+    try:
+        if json.loads(x) == json.loads(y): continue
+    except Exception: pass
+    sys.exit(1)
+METAPY
+      then
+        mkdir -p Extensions/FlowControls/Metadata.appintents
+        for f in Extensions/FlowControls/Metadata.appintents/*; do [ -e ".build/flowcontrols/meta/Metadata.appintents/$(basename "$f")" ] || rm -f "$f"; done
+        for f in .build/flowcontrols/meta/Metadata.appintents/*; do cp -f "$f" Extensions/FlowControls/Metadata.appintents/; done
         echo "  (Extensions/FlowControls/Metadata.appintents aktualisiert – mit committen)"
       fi
     elif [ -d Extensions/FlowControls/Metadata.appintents ]; then

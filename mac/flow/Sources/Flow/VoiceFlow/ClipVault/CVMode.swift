@@ -17,7 +17,7 @@ enum CVAppMode: String, CaseIterable, Identifiable {
 }
 
 enum CVSection: String, CaseIterable, Identifiable {
-    case verlauf, angeheftet, bereiche, bilder, links, dateien, geteilt, einstellungen
+    case verlauf, angeheftet, bereiche, bilder, links, dateien, geteilt, statistik, einstellungen
     var id: String { rawValue }
 
     var title: String {
@@ -29,6 +29,7 @@ enum CVSection: String, CaseIterable, Identifiable {
         case .links: return "Links"
         case .dateien: return "Dateien"
         case .geteilt: return Identity.partnerName.map { "Geteilt mit \($0)" } ?? "Geteilt"
+        case .statistik: return "Statistik"
         case .einstellungen: return "Einstellungen"
         }
     }
@@ -42,6 +43,7 @@ enum CVSection: String, CaseIterable, Identifiable {
         case .links: return "link"
         case .dateien: return "doc"
         case .geteilt: return "person.2"
+        case .statistik: return "chart.bar"
         case .einstellungen: return "gearshape"
         }
     }

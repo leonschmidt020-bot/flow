@@ -7,6 +7,7 @@ struct CVSidebar: View {
     @ObservedObject var state = CVHubState.shared
     @ObservedObject var cv = ClipVaultClient.shared
     @ObservedObject var shared = CVShared.shared
+    @ObservedObject var stats = CVStatsModel.shared
     @State private var status = ClipVaultClient.shared.status()
 
     var body: some View {
@@ -56,6 +57,9 @@ struct CVSidebar: View {
                     .transition(.opacity)
             }
             Rectangle().fill(VF.hairline).frame(height: 1).padding(.bottom, 12)
+            CVNavRow(title: CVSection.statistik.title, icon: .symbol(CVSection.statistik.symbol),
+                     selected: state.section == .statistik) { state.go(.statistik) }
+                .padding(.bottom, 2)
             CVNavRow(title: CVSection.einstellungen.title, icon: .symbol(CVSection.einstellungen.symbol),
                      selected: state.section == .einstellungen) { state.go(.einstellungen) }
                 .padding(.bottom, 13)
@@ -71,7 +75,11 @@ struct CVSidebar: View {
         }
     }
 
-    private var todayCount: Int { cv.items.filter { Calendar.current.isDateInToday($0.date) }.count }
+    /// Echte Kopien heute (stats.json); ohne Statistik wie früher aus dem Verlauf geschätzt
+    private var todayCount: Int {
+        let n = stats.day(Date()).n
+        return n > 0 ? n : cv.items.filter { Calendar.current.isDateInToday($0.date) }.count
+    }
 
     private var statusCard: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -95,6 +103,11 @@ struct CVSidebar: View {
         .padding(.horizontal, 16).padding(.vertical, 14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .hubCard(VF.card, radius: 12)
+        .contentShape(Rectangle())
+        .onTapGesture { state.go(.statistik) }
+        .help("Statistik öffnen")
+        .onAppear { stats.reload() }
+        .onReceive(Timer.publish(every: 5, on: .main, in: .common).autoconnect()) { _ in stats.reload() }
     }
 }
 

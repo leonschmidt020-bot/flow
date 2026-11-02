@@ -147,6 +147,7 @@ final class CommandChannel: NSObject {
             let pb = NSPasteboard.general
             guard MultiCopy.write(plan, to: pb) else { return Result(ok: false, error: plan.skipped > 0 ? "nicht verfuegbar" : "Eintraege nicht gefunden") }
             AppState.shared.lastChange = pb.changeCount   // nicht als neuer Verlaufs-Eintrag erfassen
+            CVStats.shared.recordReuse(plan.images + plan.texts + plan.files)
             let sharedIds = ids.filter { store.item($0) == nil && SharedVault.shared.item($0) != nil }
             if !sharedIds.isEmpty { SharedSeen.shared.markSeen(sharedIds) }
             if str(o, "toast") != "false" && (o["toast"] as? Bool) != false { Toast.shared.show(MultiCopy.toastText(plan)) }

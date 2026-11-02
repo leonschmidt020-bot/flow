@@ -107,6 +107,7 @@ enum CVDev {
                 if let f = all.first { CVImageViewer.shared.open(all, id: f.id) }
             }),
             ("14_einstellungen", nil, { st.section = .einstellungen }),
+            ("14b_statistik", nil, { st.section = .statistik }),
             ("15_klein_verlauf", NSSize(width: 1000, height: 680), { st.section = .verlauf; st.selectedID = first { $0.collection == nil } }),
             ("16_ohne_seitenleiste", NSSize(width: 1100, height: 720), { hub.sidebarVisible = false }),
             // Mehrfachauswahl (nur im Speicher): drei Einträge im Verlauf gewählt · drei Bilder auf der Bilder-Seite

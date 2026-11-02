@@ -309,6 +309,7 @@ if cliArgs.count >= 2 && cliArgs[1] == "test-phonedrop" {
 if cliArgs.count >= 2 && cliArgs[1] == "actionbar-test" { runActionBarTest() }
 // Selbsttest der Mehrfachauswahl + Zwischenablage-Inhalt (eigene Test-Zwischenablage, Testordner in /tmp)
 if cliArgs.count >= 2 && cliArgs[1] == "multiselect-test" { runMultiSelectTest() }
+if cliArgs.count >= 2 && cliArgs[1] == "stats-test" { runStatsTest() }
 // Selbsttest: derselbe Screenshot ueber Datei + Zwischenablage -> ein Eintrag (nur mit CLIPVAULT_HOME)
 if cliArgs.count >= 2 && cliArgs[1] == "doppelt-test" { runDoppeltTest(cliArgs) }
 // Geteilter Tresor: Kopplung + Sync (sync.swift)
@@ -348,6 +349,7 @@ if cliArgs.count >= 2 && !cliArgs[1].hasPrefix("-") {
                           Sync-Server (Cloudflare Worker) eintragen / Zustand zeigen
       sync-agent          nur Sync ohne Oberflaeche (Test-/Zweitgeraet, mit CLIPVAULT_HOME)
       actionbar-test      Selbsttest der Aktions-Leiste (Griff, Halten, Ziehen-Loslassen, Einfahren)
+      stats-test          Selbsttest Statistik (stats.json: Kopien, Arten, Apps, Stunden)
       multiselect-test    Selbsttest Mehrfachauswahl (⌘/⇧-Klick, ⌘A) + Inhalt für „Alle kopieren"
       multicopy-test <n> [bilder|gemischt]
                           die ersten n Bilder (bzw. gemischt) wie „Alle kopieren" auf eine EIGENE

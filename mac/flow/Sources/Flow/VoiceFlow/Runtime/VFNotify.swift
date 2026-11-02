@@ -704,8 +704,8 @@ struct VFNotifyCardContent: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.top, 5)
                 }
-                if !n.thumbnails.isEmpty {
-                    VFThumbStrip(urls: n.thumbnails, more: n.thumbnailMore)
+                if !n.thumbnails.isEmpty || n.thumbnailCaption != nil {
+                    if !n.thumbnails.isEmpty { VFThumbStrip(urls: n.thumbnails, more: n.thumbnailMore) }
                     if let c = n.thumbnailCaption {
                         Text(c).font(.system(size: 11.5)).foregroundStyle(.white.opacity(0.6))
                             .lineLimit(2).truncationMode(.tail).fixedSize(horizontal: false, vertical: true).padding(.top, 5)

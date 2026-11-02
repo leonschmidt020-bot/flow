@@ -18,6 +18,7 @@ final class AppState: NSObject {
     let startedAt = Date()
     func start() {
         lastChange = pb.changeCount
+        CVStats.shared.backfillOnce(Store.shared.items)
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let b = statusItem.button {
             b.image = NSImage(systemSymbolName: "doc.on.clipboard", accessibilityDescription: "Clipboard")
@@ -115,6 +116,7 @@ final class AppState: NSObject {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.3) { [weak self] in
                 guard let self = self, self.pb.changeCount == cc else { return }
                 let k = self.capture("iPhone")
+                if let k { self.recordStat(k, app: "iPhone", source: "iPhone") }
                 PhoneDrop.shared.show(k ?? "In Zwischenablage")
                 self.panel.reloadIfVisible()
             }
@@ -126,8 +128,15 @@ final class AppState: NSObject {
         if typeNames.contains(where: { skip.contains($0) }) { return }
         // Reihenfolge: expliziter Marker (copy-ki) schlaegt App-Erkennung
         let explicit = pb.string(forType: NSPasteboard.PasteboardType("app.flowdictation.clipvault.source"))
-        capture(explicit ?? aiSourceFromFrontmostApp())
+        let src = explicit ?? aiSourceFromFrontmostApp()
+        if let k = capture(src) { recordStat(k, app: NSWorkspace.shared.frontmostApplication?.localizedName, source: src) }
         panel.reloadIfVisible()
+    }
+    /// Statistik (stats.swift): Art aus der Rückmeldung von capture(), Link = Text, der nur aus einer URL besteht
+    private func recordStat(_ captured: String, app: String?, source: String?) {
+        let kind = captured.hasPrefix("Bild") ? "bild" : captured.hasPrefix("Datei") ? "datei"
+                 : (soleURL(pb.string(forType: .string)) != nil ? "link" : "text")
+        CVStats.shared.recordCopy(kind: kind, app: app, source: source)
     }
     // MARK: - Aufnehmen von aussen (16.08.2026)
     // Damit ein Screenshot IMMER im Verlauf landet — auch wenn die Vorschau-Blase
@@ -185,6 +194,7 @@ final class AppState: NSObject {
                 guard let png = png else { cvLog("Aufnehmen: Bild nicht lesbar — \(name)"); return }
                 // Doppel (derselbe Screenshot kam schon ueber die Zwischenablage) fuehrt addImage selbst zusammen
                 Store.shared.addImage(png, origin: original ?? path)
+                CVStats.shared.recordScreenshot()
                 cvLog("Aufgenommen: \(name)")
                 self?.panel.reloadIfVisible()
             }
@@ -211,6 +221,7 @@ final class AppState: NSObject {
         Toast.shared.show(text)
     }
     func copyAndPaste(_ item: ClipItem) {
+        CVStats.shared.recordReuse()
         Store.shared.moveToTop(item); pb.clearContents()
         if item.kind == .text, let t = item.text { pb.setString(t, forType: .string) }
         else if item.kind == .file, let refs = item.files {

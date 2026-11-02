@@ -23,8 +23,8 @@ struct CVSettingsPage: View {
 
                 CVSettingsCard(caption: "Verlauf") {
                     CVSettingRow(title: "Aufbewahrung",
-                                 detail: "Zwei Tage, höchstens 200 Einträge. Angeheftetes und alles in Bereichen bleibt, bis du es löschst.") {
-                        Text("\(cv.items.count) / 200").font(.system(size: 14, weight: .medium)).monospacedDigit().foregroundStyle(VF.ink)
+                                 detail: "Drei Tage, höchstens 500 Einträge. Angeheftetes und alles in Bereichen bleibt, bis du es löschst.") {
+                        Text("\(cv.items.filter { !$0.pinned && $0.collection == nil }.count) / 500").font(.system(size: 14, weight: .medium)).monospacedDigit().foregroundStyle(VF.ink)
                     }
                     CVSettingRow(title: "Dauerhaft gespeichert",
                                  detail: "\(cv.items.filter(\.pinned).count) angeheftet · \(cv.items.filter { $0.collection != nil }.count) in \(cv.collections.count) Bereichen") {

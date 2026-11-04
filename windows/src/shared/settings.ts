@@ -1,6 +1,7 @@
 // Settings schema, defaults and migration (pure – shared by main and renderer, unit-tested).
 import type { DictEntry } from '../core/textCleaner';
 import { AP_MODES, type APMode } from './agentPrompt';
+import { sanitizePlacements, type PillPlacement } from './pillPlacement';
 
 export const SETTINGS_VERSION = 2;
 
@@ -41,6 +42,10 @@ export interface Settings {
   agentPrompts: APMode;
   dictionary: DictEntry[];
   onboardingDone: boolean;
+  /** where the pill sits, per screen (drag it; src/shared/pillPlacement.ts) – missing = bottom centre */
+  pillPlacements: Record<string, PillPlacement>;
+  /** the „no right Ctrl key?“ hint was answered (laptops with a Copilot key) – not shown again */
+  hotkeyHintDone: boolean;
 }
 
 export const DEFAULTS: Settings = {
@@ -68,6 +73,8 @@ export const DEFAULTS: Settings = {
   agentPrompts: 'on',
   dictionary: [],
   onboardingDone: false,
+  pillPlacements: {},
+  hotkeyHintDone: false,
 };
 
 const bool = (v: unknown, d: boolean) => (typeof v === 'boolean' ? v : d);
@@ -144,6 +151,8 @@ export function migrateSettings(raw: unknown): Settings {
     agentPrompts: oneOf(r.agentPrompts, AP_MODES, DEFAULTS.agentPrompts),
     dictionary: sanitizeDictionary(r.dictionary),
     onboardingDone: bool(r.onboardingDone, false),
+    pillPlacements: sanitizePlacements(r.pillPlacements),
+    hotkeyHintDone: bool(r.hotkeyHintDone, false),
   };
 }
 

@@ -15,5 +15,10 @@ contextBridge.exposeInMainWorld('flowPill', {
   onAgentFlash: (cb: (f: unknown) => void) => ipcRenderer.on('pill:apFlash', (_e, f) => cb(f)),
   agentAction: (a: string) => ipcRenderer.send('pill:apAction', a),
   agentHover: (on: boolean) => ipcRenderer.send('pill:apHover', on),
+  // where the capsule sits in the window (pill can be dragged anywhere) + dragging it
+  onAnchor: (cb: (a: unknown) => void) => ipcRenderer.on('pill:anchor', (_e, a) => cb(a)),
+  onMenuClosed: (cb: () => void) => ipcRenderer.on('pill:menuClosed', () => cb()),
+  dragStart: () => ipcRenderer.send('pill:dragStart'),
+  dragEnd: () => ipcRenderer.send('pill:dragEnd'),
   ready: () => ipcRenderer.send('pill:ready'),
 });

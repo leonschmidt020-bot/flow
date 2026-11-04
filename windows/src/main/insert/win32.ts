@@ -2,6 +2,7 @@
 //   SendInput (Ctrl+V, Start-menu mask key), foreground process name.
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { KeySender } from './inserter';
+import { log } from '../log';
 
 export const VK = { RETURN: 0x0d, CONTROL: 0x11, LCONTROL: 0xa2, RCONTROL: 0xa3, V: 0x56, SHIFT: 0x10, MENU: 0x12, LWIN: 0x5b, RWIN: 0x5c, MASK: 0xe8 } as const;
 export const INPUT_KEYBOARD = 1;
@@ -116,7 +117,8 @@ export function foregroundExe(): string {
     a.GetWindowThreadProcessId(hwnd, pid);
     if (!pid[0]) return '';
     const PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
-    const h = a.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid[0]);
+    // BOOL bInheritHandle is an `int` for koffi – a JS boolean throws „Unexpected Boolean value“ (was: app always '')
+    const h = a.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid[0]);
     if (!h) return '';
     try {
       const buf = Buffer.alloc(2048);
@@ -127,7 +129,9 @@ export function foregroundExe(): string {
     } finally {
       a.CloseHandle(h);
     }
-  } catch {
+  } catch (e) {
+    if (!fgExeLogged) { fgExeLogged = true; log('foregroundExe failed', e); }
     return '';
   }
 }
+let fgExeLogged = false;

@@ -2,7 +2,11 @@ import { Menu, Tray, nativeImage, type MenuItemConstructorOptions } from 'electr
 import { paths } from './paths';
 import { t, hotkeyShort, type Locale } from '../shared/i18n';
 
-export interface TrayActions { openHub(): void; openClipVault(): void; clipVaultOn(): boolean; togglePause(): void; checkUpdates(): void; quit(): void }
+export interface TrayActions {
+  openHub(): void; openClipVault(): void; clipVaultOn(): boolean; togglePause(): void; checkUpdates(): void; quit(): void;
+  /** pill: always visible on/off, back to the bottom centre */
+  pillVisible?(): boolean; togglePill?(): void; resetPill?(): void;
+}
 
 export class FlowTray {
   private tray: Tray | null = null;
@@ -30,11 +34,16 @@ export class FlowTray {
       { type: 'separator' },
       { label: t(locale, 'trayHotkey', { hotkey: hotkeyShort(locale, hotkey) }), enabled: false },
       { label: paused ? t(locale, 'resume') : t(locale, 'pause'), click: () => this.a.togglePause() },
+      ...(this.a.togglePill ? [
+        { label: t(locale, 'pillShow'), type: 'checkbox' as const, checked: this.a.pillVisible?.() ?? true, click: () => this.a.togglePill?.() },
+        { label: t(locale, 'pillPosReset'), click: () => this.a.resetPill?.() },
+      ] : []),
       { label: t(locale, 'checkUpdates'), click: () => this.a.checkUpdates() },
       { type: 'separator' },
       { label: t(locale, 'trayQuit'), click: () => this.a.quit() },
     ]));
     this.tray.setToolTip(paused ? `Flow – ${t(locale, 'toastPaused')}` : `Flow – ${t(locale, 'trayHotkey', { hotkey: hotkeyShort(locale, hotkey) })}`);
   }
+  togglePause() { this.a.togglePause(); }
   destroy() { this.tray?.destroy(); this.tray = null; }
 }

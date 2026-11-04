@@ -16,6 +16,11 @@ export class HotkeyService {
   onComboDown: () => void = () => {};
   /** Esc while no dictation runs (Agent-Prompt card) */
   onEscape: () => void = () => {};
+  /** the Copilot key (Win + Shift + F23) – on such laptops there is no right Ctrl */
+  onCopilotKey: () => void = () => {};
+  /** keys pressed since start / right Ctrl seen (hint for laptops without a right Ctrl key) */
+  keyCount = 0;
+  rightCtrlSeen = false;
 
   constructor(private choice: HotkeyChoice, cb: HoldCallbacks, doubleTap: boolean) {
     this.machine = new HoldToTalk(comboFor(choice), { ...cb, onComboDown: () => this.onComboDown() }, { doubleTap });
@@ -31,6 +36,9 @@ export class HotkeyService {
       this.hook = uIOhook;
       uIOhook.on('keydown', (e: { keycode: number }) => {
         if (Date.now() < this.injectingUntil) return;
+        this.keyCount++;
+        if (e.keycode === K.CtrlRight) this.rightCtrlSeen = true;
+        if (e.keycode === K.F23) { try { this.onCopilotKey(); } catch (err) { log('hotkey: copilot', err); } }
         const idle = this.machine.current === 'idle';
         const repeat = this.machine.keysDown.has(e.keycode);
         this.machine.keyDown(e.keycode);

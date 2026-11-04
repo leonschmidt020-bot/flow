@@ -37,7 +37,9 @@ async function start(o: { micDeviceId: string; systemAudio: boolean }) {
   ctx = new AudioContext({ sampleRate: 16000, latencyHint: 'playback' });
   await ctx.audioWorklet.addModule('../mic/worklet.js');
   const micConstraints = (id: string): MediaStreamConstraints => ({
-    audio: { deviceId: id ? { exact: id } : undefined, channelCount: 1, echoCancellation: false, noiseSuppression: true, autoGainControl: true },
+    // no browser noise suppression (smears word starts, hurts recognition); AGC stays on here – long meetings have no
+    // level normalisation of their own and the AGC has time to settle
+    audio: { deviceId: id ? { exact: id } : undefined, channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: true },
     video: false,
   });
   let mic: MediaStream;

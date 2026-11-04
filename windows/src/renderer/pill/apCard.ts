@@ -217,22 +217,35 @@ export class AgentCard {
     }
   }
 
-  /** place next to the capsule (window coordinates): right if there is room, else left, else above it */
-  layout(W: number, winH: number, capsule: { x: number; y: number; w: number; h: number }) {
+  /** place next to the capsule (window coordinates): right if there is room, else left, else above it.
+   *  `below`: the pill sits near the top of the screen → the card hangs down from the capsule instead. */
+  layout(W: number, winH: number, capsule: { x: number; y: number; w: number; h: number }, below = false) {
     if (!this.msg) return;
     const roomRight = W - (capsule.x + capsule.w) - GAP - INSET >= CARD_W;
     const roomLeft = capsule.x - GAP - INSET >= CARD_W;
-    let x: number, bottom: number;
+    let x: number;
     let side: 'right' | 'left' | 'above';
-    if (roomRight) { side = 'right'; x = capsule.x + capsule.w + GAP; bottom = winH - (capsule.y + capsule.h) - 2; }
-    else if (roomLeft) { side = 'left'; x = capsule.x - GAP - CARD_W; bottom = winH - (capsule.y + capsule.h) - 2; }
-    else { side = 'above'; x = Math.max(INSET, Math.min(W - INSET - CARD_W, capsule.x + capsule.w / 2 - CARD_W / 2)); bottom = winH - capsule.y + GAP; }
-    const maxH = winH - bottom - TILE_OVERLAP - 4;
+    if (roomRight) { side = 'right'; x = capsule.x + capsule.w + GAP; }
+    else if (roomLeft) { side = 'left'; x = capsule.x - GAP - CARD_W; }
+    else { side = 'above'; x = Math.max(INSET, Math.min(W - INSET - CARD_W, capsule.x + capsule.w / 2 - CARD_W / 2)); }
+    let top = '', bottom = '';
+    let maxH: number;
+    if (below) {
+      // hanging down: the illustration tile sticks out above the card → leave room for it
+      const t = side === 'above' ? capsule.y + capsule.h + GAP + TILE_OVERLAP : Math.max(TILE_OVERLAP + 2, capsule.y - 2 + TILE_OVERLAP);
+      top = `${Math.round(t)}px`; bottom = 'auto';
+      maxH = winH - t - 6;
+    } else {
+      const b = side === 'above' ? winH - capsule.y + GAP : winH - (capsule.y + capsule.h) - 2;
+      bottom = `${Math.round(b)}px`; top = 'auto';
+      maxH = winH - b - TILE_OVERLAP - 4;
+    }
     this.el.style.setProperty('--ap-max', `${Math.max(140, maxH)}px`);
     if (side !== this.placeSide) { this.placeSide = side; this.el.dataset.side = side; }
-    const l = `${Math.round(x)}px`, b = `${Math.round(bottom)}px`;
+    const l = `${Math.round(x)}px`;
     if (this.el.style.left !== l) this.el.style.left = l;
-    if (this.el.style.bottom !== b) this.el.style.bottom = b;
+    if (this.el.style.bottom !== bottom) this.el.style.bottom = bottom;
+    if (this.el.style.top !== top) this.el.style.top = top;
   }
 
   /** card + the illustration sticking out above it */

@@ -10,7 +10,8 @@ Dazu gehört **ClipVault**, ein Verlauf für die Zwischenablage mit Suche, Bilde
 
 | | Mac | Windows |
 |---|---|---|
-| Diktat-Taste | **fn** halten (doppelt tippen = freihändig) | **rechte Strg** halten (doppelt tippen = freihändig) – ohne rechte Strg (Copilot-Taste, z. B. Samsung Galaxy Book): in den Einstellungen **Alt Gr** wählen |
+| Diktat-Taste | **fn** halten (doppelt tippen = freihändig) | **rechte Strg** halten (doppelt tippen = freihändig) – ohne rechte Strg (Copilot-Taste): Flow bietet beim ersten Druck auf die Copilot-Taste **Strg + Win** oder **Alt Gr** an |
+| Pille | anklicken, ziehen, hochkant am Rand | anklicken (Sprache), Rechtsklick (Menü), ziehen, hochkant am Rand (ab 0.4.0) |
 | Spracherkennung | Parakeet (CoreML), optional Whisper | Parakeet v3 (sherpa-onnx), optional Whisper |
 | ClipVault | ⌘⇧V | Strg+Umschalt+V |
 | Bildschirmaufnahme | ⌃⌥R oder Kontrollzentrum-Knopf (Bildschirm unter der Maus, Ton wählbar, lokales Transkript) | – (nur Mac) |

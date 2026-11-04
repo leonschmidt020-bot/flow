@@ -1,7 +1,10 @@
-// Pill (transparent, click-through, always on top, never focused) + Hub window.
-import { BrowserWindow, ipcMain, screen, shell } from 'electron';
+// Pill (transparent, click-through outside the capsule, always on top, never focused) + Hub window.
+// 0.4.0: like the Mac pill – hover shows the dictation language (+ ClipVault button), click = menu, right click = full
+// menu, drag it anywhere (snaps to 8 spots, stored per screen, upright at the left/right edge).
+import { BrowserWindow, ipcMain, screen, shell, type Display, type Menu } from 'electron';
 import { paths } from './paths';
 import { AP_ACTIONS, type APAction, type APCardMessage, type APFlash } from '../shared/agentPrompt';
+import { displayKey, isVertical, placementCenter, placementForDrop, windowAround, type PillPlacement, type Point } from '../shared/pillPlacement';
 
 export type PillMode = 'idle' | 'recording' | 'handsfree' | 'transcribing' | 'loading' | 'hidden';
 export interface PillState {
@@ -13,8 +16,16 @@ export interface PillState {
   meetingCard?: { kind: string; title: string; sub: string; yes: string; no: string } | null;
   /** an Agent-Prompt is being built (lilac dots while the pill rests) */
   apBusy?: boolean;
+  /** recording, but the mic delivers no audio yet (cold start) – dimmed bars, don't speak yet */
+  micWait?: boolean;
+  /** dictation language, shown on hover („Auto“ / „DE“ / „EN“) */
+  lang?: string;
+  /** ClipVault is on → small button next to the pill on hover */
+  clipVault?: boolean;
 }
-export type PillClick = 'cancel' | 'stop' | 'meetingStop' | 'meetingOpen' | 'cardYes' | 'cardNo';
+export type PillClick = 'cancel' | 'stop' | 'meetingStop' | 'meetingOpen' | 'cardYes' | 'cardNo' | 'langMenu' | 'menu' | 'clipvault' | 'stopRecording';
+/** where the capsule sits inside the pill window (sent to the renderer) */
+export interface PillAnchor { x: number; y: number; vertical: boolean; below: boolean }
 /** a question card above the pill („Wort gelernt?“) – strings are already localised */
 export interface PillCard { id: number; title: string; text: string; options: string[]; save: string; no: string; timeoutMs: number }
 export interface PillCardAnswer { id: number; save: boolean; choice?: string; timeout?: boolean }
@@ -44,6 +55,16 @@ export class Pill {
   agentHover = false;
   private agentShown = false;
   private agentShrink: NodeJS.Timeout | null = null;
+  /** placements per screen (settings) and how a new one is stored */
+  placements: () => Record<string, PillPlacement> = () => ({});
+  onPlacement: (key: string, pl: PillPlacement | null) => void = () => {};
+  /** left mouse button physically down (Windows: GetAsyncKeyState) – ends a drag whose mouseup got lost */
+  mouseDown: (() => boolean) | null = null;
+  private center: Point = { x: 0, y: 0 };
+  private anchorSent = '';
+  private anchor: PillAnchor = { x: PILL_W / 2, y: PILL_H - 26, vertical: false, below: false };
+  private drag: { cursor: Point; center: Point; timer: NodeJS.Timeout } | null = null;
+  private menuOpen = false;
 
   create() {
     const win = new BrowserWindow({
@@ -59,6 +80,7 @@ export class Pill {
     ipcMain.on('pill:ready', (e) => {
       if (e.sender !== win.webContents) return;
       this.ready = true;
+      win.webContents.send('pill:anchor', this.anchor);
       win.webContents.send('pill:state', this.last);
       for (const [ch, p] of this.queue) win.webContents.send(ch, p);
       this.queue = [];
@@ -71,6 +93,8 @@ export class Pill {
       this.onAgentAction(a as APAction);
     });
     ipcMain.on('pill:apHover', (e, on: unknown) => { if (e.sender === win.webContents) this.agentHover = on === true; });
+    ipcMain.on('pill:dragStart', (e) => { if (e.sender === win.webContents) this.startDrag(); });
+    ipcMain.on('pill:dragEnd', (e) => { if (e.sender === win.webContents) this.endDrag(); });
     ipcMain.on('pill:cardAnswer', (e, a: PillCardAnswer) => {
       if (e.sender !== win.webContents || !a || typeof a.id !== 'number') return;
       // the card is gone → click-through again (through the shared mouse model, the drop zone may still hold it)
@@ -92,34 +116,93 @@ export class Pill {
 
   private pollHover() {
     if (!this.win || this.win.isDestroyed() || !this.win.isVisible()) return;
+    if (this.drag) return;
     const b = this.win.getBounds();
     const p = screen.getCursorScreenPoint();
-    const cx = b.x + b.width / 2, cy = b.y + b.height - 26;
-    const w = this.last.meeting || this.last.task ? 190 : 70;
-    const inside = Math.abs(p.x - cx) <= w / 2 && Math.abs(p.y - cy) <= 18;
+    const cx = b.x + this.anchor.x, cy = b.y + this.anchor.y;
+    const restingHidden = this.last.mode === 'idle' && this.last.alwaysVisible === false && !this.last.meeting && !this.last.task && !this.last.apBusy;
+    // just the capsule (a drop target needs the window to take the mouse; the renderer widens it for the hover look
+    // itself – forwarded mouse moves – so clicks next to the resting pill still reach the app below)
+    let w = this.last.meeting || this.last.task ? 200 : 70, hh = 36;
+    if (this.anchor.vertical && !this.last.meeting && !this.last.task) [w, hh] = [hh, w];
+    const inside = !restingHidden && Math.abs(p.x - cx) <= w / 2 && Math.abs(p.y - cy) <= hh / 2;
     if (inside !== this.dropZone) { this.dropZone = inside; this.applyMouse(); }
+  }
+
+  /** dragging: the window follows the cursor (main process – the renderer would lose the mouse at the window edge) */
+  private startDrag() {
+    if (this.drag || !this.win || this.win.isDestroyed()) return;
+    const cursor = screen.getCursorScreenPoint();
+    const timer = setInterval(() => this.dragTick(), 16);
+    this.drag = { cursor, center: { ...this.center }, timer };
+    this.rendererInteractive = true;
+    this.applyMouse();
+  }
+  private dragTick() {
+    const d = this.drag;
+    if (!d || !this.win || this.win.isDestroyed()) return;
+    if (this.mouseDown && !this.mouseDown()) { this.endDrag(); return; }
+    const p = screen.getCursorScreenPoint();
+    const c = { x: d.center.x + (p.x - d.cursor.x), y: d.center.y + (p.y - d.cursor.y) };
+    const disp = screen.getDisplayNearestPoint(p);
+    this.layoutAt(c, disp.workArea);
+  }
+  private endDrag() {
+    const d = this.drag;
+    if (!d) return;
+    clearInterval(d.timer);
+    this.drag = null;
+    const disp = screen.getDisplayNearestPoint(this.center);
+    this.onPlacement(displayKey(disp), placementForDrop(this.center, disp.workArea));
+    this.rendererInteractive = false;
+    this.applyMouse();
+    this.place();
+  }
+  get dragging() { return !!this.drag; }
+
+  /** show a native menu at the capsule; the window stays interactive while it is open */
+  popup(menu: Menu) {
+    if (!this.win || this.win.isDestroyed()) return;
+    this.menuOpen = true;
+    this.applyMouse();
+    const x = Math.max(0, Math.round(this.anchor.x - 40)), y = Math.round(this.anchor.below ? this.anchor.y + 18 : this.anchor.y - 14);
+    menu.popup({
+      window: this.win, x, y,
+      callback: () => { this.menuOpen = false; this.rendererInteractive = false; this.applyMouse(); this.send('pill:menuClosed', null); },
+    });
   }
 
   private applyMouse() {
     if (!this.win || this.win.isDestroyed()) return;
-    const on = this.rendererInteractive || this.dropZone;
+    const on = this.rendererInteractive || this.dropZone || this.menuOpen || !!this.drag;
     this.win.setIgnoreMouseEvents(!on, { forward: true });
   }
 
-  /** bottom centre of the display that has the mouse cursor (bigger while the Agent-Prompt card is up – the capsule
-   *  stays at the same spot: the window is centred and bottom-aligned either way) */
+  /** the display that has the mouse cursor, at the pill's spot stored for that display (default: bottom centre).
+   *  Bigger while the Agent-Prompt card is up – the capsule stays at the same spot. */
   place() {
     // display-metrics-changed kann nach dem Schließen der Pille noch feuern (Aufwachen, Monitorwechsel)
-    if (!this.win || this.win.isDestroyed()) return;
-    const d = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+    if (!this.win || this.win.isDestroyed() || this.drag) return;
+    const d: Display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
     const wa = d.workArea;
+    this.layoutAt(placementCenter(this.placements()[displayKey(d)], wa), wa);
+  }
+
+  private layoutAt(c: Point, wa: { x: number; y: number; width: number; height: number }) {
+    if (!this.win || this.win.isDestroyed()) return;
     const W = this.agentShown ? Math.min(PILL_AP_W, wa.width) : PILL_W;
     const Hh = this.agentShown ? Math.min(PILL_AP_H, wa.height - 6) : PILL_H;
-    const x = Math.round(wa.x + (wa.width - W) / 2);
-    const y = Math.round(wa.y + wa.height - Hh - 6);
+    const g = windowAround(c, W, Hh, wa);
+    this.center = c;
+    this.anchor = { x: g.ax, y: g.ay, vertical: isVertical(c, wa), below: g.below };
     const b = this.win.getBounds();
-    if (b.x !== x || b.y !== y || b.width !== W || b.height !== Hh) this.win.setBounds({ x, y, width: W, height: Hh });
+    if (b.x !== g.x || b.y !== g.y || b.width !== W || b.height !== Hh) this.win.setBounds({ x: g.x, y: g.y, width: W, height: Hh });
+    const key = JSON.stringify(this.anchor);
+    if (key !== this.anchorSent) { this.anchorSent = key; this.send('pill:anchor', this.anchor); }
   }
+
+  /** placement reset (tray / hub): back to the bottom centre on every screen */
+  resetPlacement() { this.onPlacement('*', null); this.place(); }
 
   private send(ch: string, p: unknown) {
     if (!this.win || this.win.isDestroyed()) return;
@@ -154,7 +237,7 @@ export class Pill {
   agentFlash(f: APFlash) { this.send('pill:apFlash', f); }
   toast(text: string, kind: 'info' | 'success' | 'error' = 'info', ms = 2200) { if (this.visible) { this.place(); this.win?.showInactive(); } this.send('pill:toast', { text, kind, ms }); }
   private onDisplay = () => this.place();
-  destroy() { if (this.hoverTimer) clearInterval(this.hoverTimer); screen.removeListener('display-metrics-changed', this.onDisplay); this.win?.destroy(); this.win = null; }
+  destroy() { if (this.drag) clearInterval(this.drag.timer); this.drag = null; if (this.hoverTimer) clearInterval(this.hoverTimer); screen.removeListener('display-metrics-changed', this.onDisplay); this.win?.destroy(); this.win = null; }
 }
 
 export function createHub(opts: { show: boolean; offscreen?: boolean }): BrowserWindow {

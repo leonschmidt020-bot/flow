@@ -13,7 +13,15 @@ interface PillState {
   meetingCard?: MeetingCard | null;
   /** an Agent-Prompt is being built (pill shows lilac dots while it rests) */
   apBusy?: boolean;
+  /** recording, mic not delivering yet → dimmed bars */
+  micWait?: boolean;
+  /** dictation language for the hover look („Auto“ / „DE“ / „EN“) */
+  lang?: string;
+  /** ClipVault on → button next to the pill on hover */
+  clipVault?: boolean;
 }
+/** capsule centre inside the window; upright at the left/right screen edge; cards below when near the top edge */
+interface Anchor { x: number; y: number; vertical: boolean; below: boolean }
 interface Toast { text: string; kind?: 'info' | 'success' | 'error'; ms?: number }
 interface Card { id: number; title: string; text: string; options: string[]; save: string; no: string; timeoutMs: number }
 interface CardAnswer { id: number; save: boolean; choice?: string; timeout?: boolean }
@@ -30,6 +38,10 @@ interface PillApi {
   onAgentFlash?(cb: (f: APFlash) => void): void;
   agentAction?(a: APAction): void;
   agentHover?(on: boolean): void;
+  onAnchor?(cb: (a: Anchor) => void): void;
+  onMenuClosed?(cb: () => void): void;
+  dragStart?(): void;
+  dragEnd?(): void;
   ready(): void;
 }
 const api = (window as unknown as { flowPill?: PillApi }).flowPill;
@@ -56,9 +68,23 @@ function elapsed(startedAt: number): string {
 }
 const meetingText = () => (state.meeting ? `${state.meeting.label} · ${elapsed(state.meeting.startedAt)}` : '');
 let interactive = false;
+let anchor: Anchor = { x: innerWidth / 2, y: innerHeight - 26, vertical: false, below: false };
+/** mouse over the resting capsule (Mac: shows the language + ClipVault button) */
+let hover = false;
+/** pressed on the capsule – a click, or a drag once it moved > 4 px */
+let press: { sx: number; sy: number } | null = null;
+let moving = false;
+/** hit areas of the capsule (window coordinates, as drawn – also when upright) and the ClipVault button */
+let capRect: DOMRect | null = null;
+let clipRect: DOMRect | null = null;
+const LANG_SHORT: Record<string, string> = { auto: 'Auto', de: 'DE', en: 'EN' };
+const langLabel = () => LANG_SHORT[state.lang ?? 'auto'] ?? 'Auto';
+const resting = () => state.mode === 'idle' && !state.meeting && !state.task && !state.apBusy && !dragging;
+const hoverLook = () => resting() && (hover || moving) && alpha > 0.05;
 
 function targetSize(): [number, number] {
   if (state.mode === 'idle' && dragging) return [150, 28];
+  if (hoverLook()) return [Math.ceil(textW(langLabel(), 11, 600)) + 44, 24];
   if (state.mode === 'idle' && state.task) return [Math.max(176, textW(state.task.label, 11.5, 600) + 44), 28];
   if (state.mode === 'idle' && state.meeting) return [Math.ceil(textW(state.meeting.label + ' · 00:00', 11.5, 600)) + 62, 26];
   if (state.mode === 'idle' && state.apBusy) return [66, 24];
@@ -72,7 +98,7 @@ function targetSize(): [number, number] {
 }
 function targetAlpha() {
   if (state.mode === 'hidden') return 0;
-  if (state.mode === 'idle' && !state.alwaysVisible && !state.meeting && !state.task && !state.apBusy && !dragging) return 0;
+  if (state.mode === 'idle' && !state.alwaysVisible && !state.meeting && !state.task && !state.apBusy && !dragging && !moving) return 0;
   return 1;
 }
 function textW(s: string, size: number, weight: number) {
@@ -143,7 +169,9 @@ function drawMeetingCard(c: MeetingCard, W: number, H: number, a: number) {
   const bw1 = Math.max(70, g.measureText(c.yes).width + 22), bw2 = Math.max(64, g.measureText(c.no).width + 20);
   g.font = `600 12.5px ${FONT}`;
   const tw = Math.max(g.measureText(c.title).width, (g.font = `500 11.5px ${FONT}`, g.measureText(c.sub).width));
-  const cw = Math.min(W - 16, Math.max(300, 32 + tw + 14 + bw1 + 6 + bw2 + 12)), ch = 58, x0 = (W - cw) / 2, y0 = H - 26 - 20 - ch + (1 - a) * 6;
+  const cw = Math.min(W - 16, Math.max(300, 32 + tw + 14 + bw1 + 6 + bw2 + 12)), ch = 58;
+  const x0 = Math.max(8, Math.min(W - 8 - cw, anchor.x - cw / 2));
+  const y0 = anchor.below ? anchor.y + 20 + (1 - a) * 6 : Math.min(H - 8, anchor.y) - 20 - ch + (1 - a) * 6;
   g.save();
   g.shadowColor = `rgba(0,0,0,${0.35 * a})`; g.shadowBlur = 14; g.shadowOffsetY = 3;
   g.beginPath(); g.roundRect(x0, y0, cw, ch, 16);
@@ -181,13 +209,21 @@ function frame() {
   smooth += (level - smooth) * 0.3;
   const W = innerWidth, H = innerHeight;
   g.clearRect(0, 0, W, H);
-  const cx = W / 2, cy = H - 26;
+  // upright at the screen side (bars and strip turned; text states and the hover look stay readable)
+  const rot = anchor.vertical && (state.mode === 'recording' || state.mode === 'transcribing' || state.mode === 'handsfree'
+    || (state.mode === 'idle' && !state.meeting && !state.task && !dragging && !hoverLook()));
+  // the capsule stays inside the window (at the screen edge the window cannot be centred on it)
+  const ew = rot ? h : w, eh = rot ? w : h;
+  const cx = Math.max(ew / 2 + 6, Math.min(W - ew / 2 - 6, anchor.x)), cy = Math.max(eh / 2 + 4, Math.min(H - eh / 2 - 4, anchor.y));
   const x = cx - w / 2, y = cy - h / 2;
   hot = { cancel: null, stop: null };
   mhot = [];
+  capRect = alpha > 0.05 ? new DOMRect(cx - ew / 2, cy - eh / 2, ew, eh) : null;
+  clipRect = null;
+  if (rot) { g.save(); g.translate(cx, cy); g.rotate(Math.PI / 2); g.translate(-cx, -cy); }
 
   if (alpha > 0.005) {
-    const idleStrip = state.mode === 'idle' && !state.meeting && !state.task && !state.apBusy && !dragging;
+    const idleStrip = state.mode === 'idle' && !state.meeting && !state.task && !state.apBusy && !dragging && !hoverLook();
     // shadow + fill
     g.save();
     g.shadowColor = `rgba(0,0,0,${0.35 * alpha})`;
@@ -202,7 +238,20 @@ function frame() {
     g.strokeStyle = `rgba(255,255,255,${(h > 12 ? 0.32 : 0.42) * alpha})`;
     g.stroke();
 
-    if (state.mode === 'idle' && dragging) {
+    if (hoverLook()) {
+      // Mac: globe + dictation language; click = language menu
+      const lbl = langLabel();
+      g.font = `600 11px ${FONT}`;
+      const tw4 = g.measureText(lbl).width;
+      const gx = cx - (tw4 + 16) / 2 + 6;
+      g.strokeStyle = `rgba(255,255,255,${0.85 * alpha})`; g.lineWidth = 1.1;
+      g.beginPath(); g.arc(gx, cy, 5.2, 0, Math.PI * 2); g.stroke();
+      g.beginPath(); g.ellipse(gx, cy, 2.3, 5.2, 0, 0, Math.PI * 2); g.stroke();
+      g.beginPath(); g.moveTo(gx - 5.2, cy); g.lineTo(gx + 5.2, cy); g.stroke();
+      g.textAlign = 'left'; g.textBaseline = 'middle';
+      g.fillStyle = `rgba(255,255,255,${0.95 * alpha})`;
+      g.fillText(lbl, gx + 10, cy + 0.5);
+    } else if (state.mode === 'idle' && dragging) {
       g.font = `600 11.5px ${FONT}`; g.textAlign = 'center'; g.textBaseline = 'middle';
       g.fillStyle = `rgba(179,166,255,${alpha})`;
       g.fillText('↓', x + 16, cy + 0.5);
@@ -227,7 +276,11 @@ function frame() {
       mhot.push({ id: 'meetingStop', r: new DOMRect(sx - 11, cy - 11, 22, 22) }, { id: 'meetingOpen', r: new DOMRect(x, y, w - 26, h) });
     } else if (state.mode === 'idle' && state.apBusy) {
       drawDots(cx, cy, t, '189,161,255');
-    } else if (state.mode === 'recording') drawBars(cx, cy, 9, h - 9, t, smooth);
+    } else if (state.mode === 'recording') {
+      // mic still opening: dimmed, flat bars – speaking starts when they come alive
+      if (state.micWait) { const a0 = alpha; alpha *= 0.35; drawBars(cx, cy, 9, h - 9, t, 0); alpha = a0; }
+      else drawBars(cx, cy, 9, h - 9, t, smooth);
+    }
     else if (state.mode === 'handsfree') {
       // ✕ left, ■ (red) right, bars in the middle
       const lx = x + 15, rx = x + w - 15;
@@ -240,7 +293,9 @@ function frame() {
       g.fillStyle = `rgba(255,255,255,${alpha})`;
       g.beginPath(); g.roundRect(rx - 3, cy - 3, 6, 6, 1.3); g.fill();
       drawBars(cx, cy, 9, h - 10, t, smooth);
-      hot = { cancel: new DOMRect(lx - 11, cy - 11, 22, 22), stop: new DOMRect(rx - 11, cy - 11, 22, 22) };
+      // upright: ✕ on top, ■ below (rotated by 90° around the centre)
+      const turn = (bx: number) => (rot ? new DOMRect(cx - 11, cy + (bx - cx) - 11, 22, 22) : new DOMRect(bx - 11, cy - 11, 22, 22));
+      hot = { cancel: turn(lx), stop: turn(rx) };
     } else if (state.mode === 'transcribing') {
       drawDots(cx, cy, t);
       // subtle shimmer sweeping along the capsule
@@ -256,6 +311,24 @@ function frame() {
       drawProgress(state.label ?? '', state.progress ?? 0, x, y, cx, cy);
     }
   }
+  if (rot) g.restore();
+
+  // ClipVault button next to the resting pill on hover (Mac: under it; here beside it – the pill sits at the screen edge)
+  if (hoverLook() && state.clipVault) {
+    const r = 11;
+    const right = cx + w / 2 + 8 + 2 * r <= W - 4;
+    const bx = right ? cx + w / 2 + 8 + r : cx - w / 2 - 8 - r;
+    g.save();
+    g.shadowColor = `rgba(0,0,0,${0.3 * alpha})`; g.shadowBlur = 8; g.shadowOffsetY = 2;
+    g.beginPath(); g.arc(bx, cy, r, 0, Math.PI * 2); g.fillStyle = `rgba(0,0,0,${0.9 * alpha})`; g.fill();
+    g.restore();
+    g.beginPath(); g.arc(bx, cy, r - 0.5, 0, Math.PI * 2); g.strokeStyle = `rgba(255,255,255,${0.32 * alpha})`; g.lineWidth = 1; g.stroke();
+    // clipboard icon
+    g.strokeStyle = `rgba(255,255,255,${0.92 * alpha})`; g.lineWidth = 1.2; g.lineJoin = 'round';
+    g.beginPath(); g.roundRect(bx - 4.2, cy - 4.2, 8.4, 9.6, 1.6); g.stroke();
+    g.beginPath(); g.roundRect(bx - 2.2, cy - 5.8, 4.4, 2.6, 1); g.fillStyle = `rgba(0,0,0,${alpha})`; g.fill(); g.stroke();
+    clipRect = new DOMRect(bx - r - 2, cy - r - 2, 2 * r + 4, 2 * r + 4);
+  }
 
   // notetaker card („Teams erkannt · Meeting aufnehmen?“) at the top of the pill window
   cardAlpha += ((state.meetingCard ? 1 : 0) - cardAlpha) * 0.25;
@@ -263,7 +336,7 @@ function frame() {
 
   // Agent-Prompt card: next to the capsule; steps aside for the meeting card, pushes the learner card away
   ap.setHidden(!!state.meetingCard);
-  ap.layout(W, H, { x, y, w, h });
+  ap.layout(W, H, { x: cx - ew / 2, y: cy - eh / 2, w: ew, h: eh }, anchor.below);
   const apShown = ap.visible;
   if (apShown !== apWasShown) { apWasShown = apShown; syncLearnerAway(); }
 
@@ -276,52 +349,116 @@ function frame() {
       g.font = `500 12px ${FONT}`;
       const hasDot = toast.kind === 'error' || toast.kind === 'success';
       const tw3 = Math.min(W - 24, g.measureText(toast.text).width + 28 + (hasDot ? 12 : 0));
-      const ty = cy - 13 - 10 - 24 + (1 - life) * 4 - cardLift();
-      let txx = cx - tw3 / 2;
+      const ty = anchor.below ? cy + eh / 2 + 10 + (1 - life) * 4 + cardLift() : cy - eh / 2 - 10 - 24 + (1 - life) * 4 - cardLift();
+      let txx = Math.max(12, Math.min(W - 12 - tw3, cx - tw3 / 2));
+      let ty2 = ty;
+      // no room above the card (upright pill at the side): next to the capsule instead
+      if (ty < 4 || ty + 24 > H - 2) {
+        ty2 = Math.max(4, Math.min(H - 28, cy - 12));
+        txx = cx - ew / 2 - 10 - tw3 >= 8 ? cx - ew / 2 - 10 - tw3 : Math.min(W - 8 - tw3, cx + ew / 2 + 10);
+      }
       // Agent-Prompt card to the right/left of the capsule: the toast moves aside instead of hiding under it
       if (ap.visible && ap.side === 'right') txx = Math.max(12, Math.min(txx, ap.rect().left - 10 - tw3));
       if (ap.visible && ap.side === 'left') txx = Math.min(W - 12 - tw3, Math.max(txx, ap.rect().right + 10));
       g.save();
       g.shadowColor = `rgba(0,0,0,${0.3 * life})`; g.shadowBlur = 12; g.shadowOffsetY = 3;
-      capsule(txx, ty, tw3, 24);
+      capsule(txx, ty2, tw3, 24);
       g.fillStyle = `rgba(0,0,0,${0.86 * life})`; g.fill();
       g.restore();
-      capsule(txx + 0.5, ty + 0.5, tw3 - 1, 23);
+      capsule(txx + 0.5, ty2 + 0.5, tw3 - 1, 23);
       g.strokeStyle = `rgba(255,255,255,${0.25 * life})`; g.lineWidth = 1; g.stroke();
       const dot = toast.kind === 'error' ? '255,99,90' : toast.kind === 'success' ? '120,220,150' : '';
       let textX = txx + tw3 / 2;
       if (dot) {
         g.fillStyle = `rgba(${dot},${life})`;
-        g.beginPath(); g.arc(txx + 13, ty + 12, 3, 0, Math.PI * 2); g.fill();
+        g.beginPath(); g.arc(txx + 13, ty2 + 12, 3, 0, Math.PI * 2); g.fill();
         textX += 7;
       }
       g.textAlign = 'center'; g.textBaseline = 'middle';
       g.fillStyle = `rgba(255,255,255,${life})`;
-      g.fillText(toast.text, textX, ty + 12.5, W - 40);
+      g.fillText(toast.text, textX, ty2 + 12.5, W - 40);
     }
   }
+  placeLearner(W, H, cx, cy, eh);
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
 
-// click-through except over the hands-free buttons and the cards
+/** the learner card follows the capsule (above it, or below it when the pill sits near the top edge) */
+let learnerPos = '';
+function placeLearner(W: number, H: number, cx: number, cy: number, eh: number) {
+  if (cardEl.hidden) return;
+  const left = Math.round(Math.max(8, Math.min(W - 8 - 336, cx - 168)));
+  const v = anchor.below ? `t${Math.round(cy + eh / 2 + 10)}` : `b${Math.round(H - (cy - eh / 2) + 10)}`;
+  const key = `${left}|${v}`;
+  if (key === learnerPos) return;
+  learnerPos = key;
+  cardEl.style.left = `${left}px`;
+  cardEl.style.transform = 'none';
+  if (v.startsWith('t')) { cardEl.style.top = `${v.slice(1)}px`; cardEl.style.bottom = 'auto'; }
+  else { cardEl.style.bottom = `${v.slice(1)}px`; cardEl.style.top = 'auto'; }
+}
+
+// click-through except over the capsule (hover look, click, drag), the hands-free buttons and the cards
+const inRect = (r: DOMRect | null, px: number, py: number, m = 0) => !!r && px >= r.x - m && px <= r.right + m && py >= r.y - m && py <= r.bottom + m;
+function overCapsule(px: number, py: number) {
+  if (!capRect) return false;
+  // the hover look is wider: keep the hover while the mouse travels to the ClipVault button
+  const zone = clipRect ? new DOMRect(Math.min(capRect.x, clipRect.x), Math.min(capRect.y, clipRect.y), Math.max(capRect.right, clipRect.right) - Math.min(capRect.x, clipRect.x), Math.max(capRect.bottom, clipRect.bottom) - Math.min(capRect.y, clipRect.y)) : capRect;
+  return inRect(zone, px, py, 6);
+}
+function setHover(on: boolean) { if (on !== hover) hover = on; }
 addEventListener('mousemove', (e) => {
+  if (press && !moving && (e.buttons & 1) && Math.hypot(e.screenX - press.sx, e.screenY - press.sy) > 4) {
+    moving = true;
+    api?.dragStart?.();
+  }
+  if (moving) { document.body.style.cursor = 'grabbing'; return; }
   const onAp = ap.hit(e.clientX, e.clientY);
   ap.pointer(onAp);
-  const over = [hot.cancel, hot.stop, ...mhot.map((m) => m.r)].some((r) => r && e.clientX >= r.x && e.clientX <= r.right && e.clientY >= r.y && e.clientY <= r.bottom) || overCard(e.clientX, e.clientY) || onAp;
+  const onBtn = [hot.cancel, hot.stop, ...mhot.map((m) => m.r)].some((r) => inRect(r, e.clientX, e.clientY));
+  const onCap = !onAp && overCapsule(e.clientX, e.clientY);
+  setHover(onCap && resting());
+  const over = onBtn || overCard(e.clientX, e.clientY) || onAp || onCap;
   if (over !== interactive) { interactive = over; api?.setInteractive(over); }
-  document.body.style.cursor = over ? 'pointer' : 'default';
+  document.body.style.cursor = onBtn || inRect(clipRect, e.clientX, e.clientY) ? 'pointer' : onCap ? 'default' : 'default';
 });
 document.addEventListener('mouseleave', () => {
   ap.pointer(false);
+  if (moving) return;
+  setHover(false);
   if (interactive) { interactive = false; api?.setInteractive(false); }
 });
 addEventListener('mousedown', (e) => {
-  const inside = (r: DOMRect | null) => !!r && e.clientX >= r.x && e.clientX <= r.right && e.clientY >= r.y && e.clientY <= r.bottom;
-  if (inside(hot.cancel)) api?.click('cancel');
-  else if (inside(hot.stop)) api?.click('stop');
-  else { const m = mhot.find((x) => inside(x.r)); if (m) api?.click(m.id); }
+  if (e.button !== 0) return;
+  if (inRect(hot.cancel, e.clientX, e.clientY)) { api?.click('cancel'); return; }
+  if (inRect(hot.stop, e.clientX, e.clientY)) { api?.click('stop'); return; }
+  const m = mhot.find((q) => inRect(q.r, e.clientX, e.clientY));
+  if (m) { api?.click(m.id); return; }
+  if (inRect(clipRect, e.clientX, e.clientY, 2)) { api?.click('clipvault'); return; }
+  if (!ap.hit(e.clientX, e.clientY) && overCapsule(e.clientX, e.clientY)) press = { sx: e.screenX, sy: e.screenY };
 });
+addEventListener('mouseup', (e) => {
+  if (e.button !== 0) return;
+  const p = press;
+  press = null;
+  if (moving) {
+    moving = false; document.body.style.cursor = 'default'; api?.dragEnd?.();
+    // main drops the mouse after the drag; the next move decides again
+    interactive = false; setHover(false);
+    return;
+  }
+  if (!p) return;
+  // a click on the capsule: resting → language menu (like the Mac), while holding the key → stop
+  if (state.mode === 'idle' && !state.meeting && !state.task) api?.click('langMenu');
+  else if (state.mode === 'recording') api?.click('stopRecording');
+});
+addEventListener('contextmenu', (e) => {
+  e.preventDefault();
+  if (overCapsule(e.clientX, e.clientY)) api?.click('menu');
+});
+api?.onMenuClosed?.(() => { setHover(false); if (interactive) { interactive = false; api?.setInteractive(false); } });
+api?.onAnchor?.((a) => { anchor = a; learnerPos = ''; });
 
 // drop audio/video files onto the pill → notetaker import
 addEventListener('dragover', (e) => { e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'; dragging = true; });
@@ -462,6 +599,11 @@ if (q.has('render')) {
   if (q.get('task')) state.task = { label: q.get('task')!, progress: Number(q.get('p') ?? 0.42) };
   if (q.get('mcard')) { const [title, sub, yes, no] = q.get('mcard')!.split('|'); state.meetingCard = { kind: 'detected', title: title!, sub: sub!, yes: yes!, no: no! }; cardAlpha = 1; }
   if (q.get('drag')) dragging = true;
+  if (q.get('ax') || q.get('ay') || q.get('vert') || q.get('below')) {
+    anchor = { x: Number(q.get('ax') ?? innerWidth / 2), y: Number(q.get('ay') ?? innerHeight - 26), vertical: q.get('vert') === '1', below: q.get('below') === '1' };
+  }
+  if (q.get('hover')) { hover = true; state.clipVault = q.get('cv') !== '0'; state.lang = q.get('lang2') ?? 'auto'; }
+  if (q.get('micwait')) state.micWait = true;
   if (q.get('lang')) document.documentElement.lang = q.get('lang')!;
   [w, h] = targetSize(); alpha = 1;
   if (mode === 'recording' || mode === 'handsfree') { level = 0.6; smooth = 0.6; setInterval(() => { level = 0.35 + Math.random() * 0.5; }, 60); }

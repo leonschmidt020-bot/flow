@@ -91,7 +91,7 @@ function Start-Flow {
 function Stop-Flow { if ($script:flow -and -not $script:flow.HasExited) { Stop-Process -Id $script:flow.Id -Force; Start-Sleep 2 } }
 
 # Diktat-Taste halten → Text muss in Notepad stehen, Zwischenablage danach wie vorher
-function Test-Dictation([string]$name, [scriptblock]$down, [scriptblock]$up) {
+function Test-Dictation([string]$name, [scriptblock]$down, [scriptblock]$up, [switch]$Warm) {
   Set-Clipboard -Value 'VORHER-1234'
   Get-Process -Name notepad -ErrorAction SilentlyContinue | Stop-Process -Force; Start-Sleep 1
   Start-Process notepad | Out-Null
@@ -118,6 +118,16 @@ function Test-Dictation([string]$name, [scriptblock]$down, [scriptblock]$up) {
   $line = Select-String -Path $log -Pattern 'dictation: ' | Select-Object -Last 1
   if (@(Select-String -Path $log -Pattern 'dictation: ').Count -le $before) { Fail "[$name] kein Diktat verarbeitet (Taste oder Mikrofon kam nicht an)" }
   Ok "[$name] Diktat verarbeitet: $($line.Line -replace '^.*dictation: ','')"
+  # 0.4.0: Mikro-Startzeit + Pegel stehen in der Zeile; beim zweiten Diktat ist das Mikro noch offen (warm)
+  if ($line.Line -notmatch 'start \d+ ms (warm|cold)') { Fail "[$name] keine Mikro-Startzeit im Protokoll" }
+  if ($line.Line -notmatch 'level peak') { Fail "[$name] kein Pegel im Protokoll" }
+  if ($Warm -and $line.Line -notmatch 'start \d+ ms warm') { Fail "[$name] Mikro war nicht mehr offen (warm erwartet)" }
+  if ($Warm) { Ok "[$name] Mikro warm: $([regex]::Match($line.Line, 'start \d+ ms warm').Value)" }
+  # Vordergrund-App muss erkannt werden (0.3.4: immer „app ?“ – koffi-Fehler bei OpenProcess)
+  if (-not $noDesk) {
+    if ($line.Line -notmatch 'app (?i:notepad\.exe)') { Fail "[$name] Vordergrund-App nicht erkannt: $($line.Line -replace '^.*(app [^ ]+).*$','$1')" }
+    Ok "[$name] Vordergrund-App erkannt (Notepad.exe)"
+  }
   Start-Sleep 2
   $clipAfter = Get-Clipboard -Raw
   if (($clipAfter -replace '\s+$','') -ne 'VORHER-1234') { Fail "[$name] Zwischenablage nicht wiederhergestellt (steht: '$clipAfter')" }
@@ -134,7 +144,8 @@ function Test-Dictation([string]$name, [scriptblock]$down, [scriptblock]$up) {
   Write-Host "[$name] Text in Notepad: $text"
   if (-not $text -or $text -eq 'VORHER-1234') { Fail "[$name] kein Text in Notepad eingefügt" }
   $miss = $Expect | Where-Object { $text -notmatch [regex]::Escape($_) }
-  if ($miss) { Fail "[$name] Text unvollständig, fehlt: $($miss -join ', ')" }
+  # warm: das virtuelle Mikro (WAV in Endlosschleife) läuft weiter – der Satz beginnt irgendwo in der Mitte
+  if ($miss -and -not $Warm) { Fail "[$name] Text unvollständig, fehlt: $($miss -join ', ')" }
   Ok "[$name] Text steht in Notepad"
   Stop-Process -Id $npPid -Force -ErrorAction SilentlyContinue
 }
@@ -144,8 +155,16 @@ Start-Flow
 $arch = (Select-String -Path $log -Pattern 'starting \((win32-[a-z0-9]+)' | Select-Object -First 1).Matches.Groups[1].Value
 Ok "App läuft als $arch"
 
-# ── 3a. Standard: rechte Strg ──
+# ── 3a. Standard: rechte Strg (zweimal: das zweite Mal muss das Mikro noch offen sein) ──
 Test-Dictation 'rechte Strg' { [void][K]::Key(0xA3, 0x1D, $true, $false) } { [void][K]::Key(0xA3, 0x1D, $true, $true) }
+Test-Dictation 'rechte Strg, zweites Diktat' { [void][K]::Key(0xA3, 0x1D, $true, $false) } { [void][K]::Key(0xA3, 0x1D, $true, $true) } -Warm
+
+# ── 3a'. Copilot-Taste (schickt F23): Hinweis „Keine rechte Strg-Taste?“ ──
+[void][K]::Key(0x86, 0x6E, $false, $false); [void][K]::Key(0x86, 0x6E, $false, $true)
+$deadline = (Get-Date).AddSeconds(10)
+while ((Get-Date) -lt $deadline -and -not (Select-String -Path $log -Pattern 'hotkey hint shown \(copilot key\)' -Quiet)) { Start-Sleep -Milliseconds 300 }
+if (-not (Select-String -Path $log -Pattern 'hotkey hint shown \(copilot key\)' -Quiet)) { Fail 'Copilot-Taste (F23) löst keinen Hinweis aus' }
+Ok 'Copilot-Taste erkannt → Hinweis „Keine rechte Strg-Taste?“'
 
 # ── 3b. Alt Gr (Laptops mit Copilot- statt rechter Strg-Taste, z. B. Samsung Galaxy Book4/5) ──
 # Windows schickt bei Alt Gr erst ein unechtes linkes Strg (Scancode 0x21D), dann rechtes Alt.

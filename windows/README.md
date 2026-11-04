@@ -7,7 +7,13 @@ Speech recognition runs **100 % on your PC**: no cloud, no account, no telemetry
 
 - Speech recognition: NVIDIA **Parakeet TDT 0.6B v3** (German, English + 23 more languages, detected automatically) via [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx). Optional: **Whisper large-v3-turbo**.
 - Silero VAD trims silence and splits long dictations.
-- Hold **Right Ctrl** (or Ctrl + Win, Right Alt, F6–F12). **Double-tap** for hands-free.
+- Hold **Right Ctrl** (or Ctrl + Win, Right Alt, F6–F12). **Double-tap** for hands-free. Laptops with a **Copilot key**
+  instead of a right Ctrl: Flow notices the key and offers **Ctrl + Win** or **Alt Gr** with one click.
+- **The pill** (like the Mac): hover shows the dictation language (+ a ClipVault button), click = language menu, right
+  click = everything (open Flow, hands-free, ClipVault, position, show/hide). **Drag it anywhere** – it snaps to 8 spots, is
+  remembered per screen and stands upright at the left/right edge. Tray: *Pille immer anzeigen*, *Pille zurück nach unten Mitte*.
+- Fast start: the mic stays open 60 s after a dictation (the next one starts instantly, incl. the 0.4 s before the key
+  press); quiet laptop array mics are levelled before recognition; the log line shows speech length, level and mic start time.
 - Polish rules ported 1:1 from the Mac app: self-corrections („… nein warte, am Freitag“), repeats, false starts, lists („erstens … zweitens …“, shopping lists, steps, to-dos), punctuation.
 - Voice commands „neue Zeile“ / „neuer Absatz“ (“new line”, “new paragraph”), filler words („ähm“, „äh“) removed.
 - **„Text dorthin, wo die Maus ist“** (*Text goes where the mouse is*, off by default): hold the key, speak, point at any

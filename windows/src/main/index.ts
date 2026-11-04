@@ -2,7 +2,7 @@
 //   flags: --no-hotkey (never install the global keyboard hook / shortcuts), --hidden (autostart),
 //          --dev (open hub), --render-check=<dir> (offscreen PNGs, then quit), --smoke=<wav> (end-to-end self test, then quit)
 import { hardExit } from './hardExit';
-import { app, BrowserWindow, clipboard, ipcMain, screen, session, shell, systemPreferences, globalShortcut } from 'electron';
+import { app, BrowserWindow, clipboard, ipcMain, Menu, screen, session, shell, systemPreferences, globalShortcut, type MenuItemConstructorOptions } from 'electron';
 import path from 'node:path';
 import os from 'node:os';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync } from 'node:fs';
@@ -11,7 +11,8 @@ import { initLog, log, logText } from './log';
 import { APP_ID, RELEASE, VERSION } from './config';
 import { JsonFile } from './store';
 import { DEFAULTS, migrateSettings, patchSettings, type Settings } from '../shared/settings';
-import { t } from '../shared/i18n';
+import { t, hotkeyShort } from '../shared/i18n';
+import { displayKey, PILL_PRESETS, type PillPlacement } from '../shared/pillPlacement';
 import type { HubState } from '../shared/hubState';
 import { History } from './history';
 import { AsrService } from './asrService';
@@ -86,8 +87,9 @@ async function main() {
   mic.init();
   const pill = new Pill();
   pill.visible = !flag('smoke');
+  pill.placements = () => settings.pillPlacements;
   pill.create();
-  pill.state({ mode: 'idle', alwaysVisible: settings.pillAlwaysVisible });
+  pill.state({ mode: 'idle', alwaysVisible: settings.pillAlwaysVisible, lang: settings.language, clipVault: settings.clipVault });
 
   let micError = '';
   if (IS_WIN) {
@@ -108,6 +110,7 @@ async function main() {
     keys = new w32.Win32KeySender();
     foregroundExe = w32.foregroundExe;
     startMenuMask = w32.sendStartMenuMask;
+    pill.mouseDown = () => w32.isKeyDown(0x01) || w32.isKeyDown(0x02); // physical buttons (left-handed mice swap them) – ends a drag whose mouseup got lost
   } else {
     keys = { paste: () => log('paste (no-op on this platform)') };
   }
@@ -220,9 +223,19 @@ async function main() {
   });
   mic.on('started', () => { if (micError) { micError = ''; pushState(); } });
   let meeting: MeetingHandle | null = null;
+  // pill menus (built further down, once settings/tray/ClipVault exist)
+  let showLangMenu = () => {};
+  let showHotkeyHint: (why: string) => void = () => {};
+  let hintOpen = false;
+  let showPillMenu = () => {};
+  let openClipVault = () => {};
   pill.onClick = (what) => {
     if (meeting?.pillClick(what)) return; // notetaker: meeting stop/open, meeting card buttons
-    if (what === 'stop') void dictation.stop(false); else if (what === 'cancel') { dictation.cancel(); hotkeys?.machine.forceIdle(); }
+    if (what === 'stop' || what === 'stopRecording') void dictation.stop(false);
+    else if (what === 'cancel') { dictation.cancel(); hotkeys?.machine.forceIdle(); }
+    else if (what === 'langMenu') showLangMenu();
+    else if (what === 'menu') showPillMenu();
+    else if (what === 'clipvault') openClipVault();
   };
   pill.onDrop = (files) => meeting?.importFiles(files);
 
@@ -239,6 +252,7 @@ async function main() {
       onHandsFree: () => dictation.handsFree(),
     }, settings.doubleTapHandsFree);
     hotkeys.onEscape = () => agent?.escape();
+    hotkeys.onCopilotKey = () => showHotkeyHint('copilot key');
     hotkeys.onComboDown = () => { if (IS_WIN && hotkeys?.usesWin) { hotkeys.injecting(60); startMenuMask(); } };
     if (!hotkeys.start()) log('global hotkey unavailable');
   }
@@ -288,10 +302,14 @@ async function main() {
   else log('clipvault: off (settings)');
 
   // ── tray ──
+  openClipVault = () => { if (cv) cv.openPanel(); else openHub('clipvault'); };
   const tray = new FlowTray({
     openHub: () => openHub(),
-    openClipVault: () => (cv ? cv.openPanel() : openHub('clipvault')),
+    openClipVault: () => openClipVault(),
     clipVaultOn: () => settings.clipVault,
+    pillVisible: () => settings.pillAlwaysVisible,
+    togglePill: () => { setSettings({ pillAlwaysVisible: !settings.pillAlwaysVisible }); },
+    resetPill: () => pill.resetPlacement(),
     togglePause: () => {
       paused = !paused;
       hotkeys?.machine.setEnabled(!paused);
@@ -351,7 +369,9 @@ async function main() {
     if (prev.hotkey !== settings.hotkey || prev.doubleTapHandsFree !== settings.doubleTapHandsFree) hotkeys?.setChoice(settings.hotkey, settings.doubleTapHandsFree);
     if (prev.engine !== settings.engine) void asr.start(settings.engine, true);
     if (prev.startWithWindows !== settings.startWithWindows) applySystem();
-    if (prev.pillAlwaysVisible !== settings.pillAlwaysVisible) pill.state({ alwaysVisible: settings.pillAlwaysVisible });
+    if (prev.pillAlwaysVisible !== settings.pillAlwaysVisible) { pill.state({ alwaysVisible: settings.pillAlwaysVisible }); tray.update(settings.locale, settings.hotkey, paused); }
+    if (prev.language !== settings.language || prev.clipVault !== settings.clipVault) pill.state({ lang: settings.language, clipVault: settings.clipVault });
+    if (JSON.stringify(prev.pillPlacements) !== JSON.stringify(settings.pillPlacements)) pill.place();
     if (prev.clipVault !== settings.clipVault) void (settings.clipVault ? startClipVault() : stopClipVault()).then(() => { tray.update(settings.locale, settings.hotkey, paused); pushState(); });
     if (prev.locale !== settings.locale || prev.hotkey !== settings.hotkey) tray.update(settings.locale, settings.hotkey, paused);
     if (prev.learnFromEdits && !settings.learnFromEdits) learner?.stop();
@@ -360,11 +380,78 @@ async function main() {
     return buildState();
   };
 
+  // ── pill: where it sits (drag → stored per screen) + its menus (Mac: click = language, right click = everything) ──
+  pill.onPlacement = (key, pl) => {
+    const next: Record<string, PillPlacement> = key === '*' || !pl ? {} : { ...settings.pillPlacements, [key]: pl };
+    setSettings({ pillPlacements: next });
+  };
+  const L = () => settings.locale;
+  const startHandsFree = () => { if (paused || dictation.state !== 'idle') return; void dictation.start(false); dictation.handsFree(); };
+  const langItems = (): MenuItemConstructorOptions[] => [
+    { label: t(L(), 'pillLangHead'), enabled: false },
+    ...(['auto', 'de', 'en'] as const).map((v): MenuItemConstructorOptions => ({
+      label: t(L(), `lang_${v}`), type: 'radio', checked: settings.language === v, click: () => { setSettings({ language: v }); },
+    })),
+  ];
+  showLangMenu = () => pill.popup(Menu.buildFromTemplate([
+    ...langItems(),
+    { type: 'separator' },
+    { label: t(L(), 'pillHandsFree'), click: startHandsFree, enabled: !paused && asr.ready },
+    { label: t(L(), 'pillOpen'), click: () => openHub() },
+  ]));
+  showPillMenu = () => {
+    const d = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+    const key = displayKey(d);
+    const cur = settings.pillPlacements[key];
+    const pos: MenuItemConstructorOptions[] = PILL_PRESETS.map((pr) => ({
+      label: t(L(), `pos_${pr}`), type: 'radio', checked: cur ? cur.preset === pr : pr === 'bottomCenter',
+      click: () => setSettings({ pillPlacements: { ...settings.pillPlacements, [key]: { preset: pr } } }),
+    }));
+    pill.popup(Menu.buildFromTemplate([
+      { label: paused ? t(L(), 'toastPaused') : t(L(), 'trayHotkey', { hotkey: hotkeyShort(L(), settings.hotkey) }), enabled: false },
+      { type: 'separator' },
+      { label: t(L(), 'pillOpen'), click: () => openHub() },
+      { label: t(L(), 'pillHandsFree'), click: startHandsFree, enabled: !paused && asr.ready },
+      ...(settings.clipVault ? [{ label: t(L(), 'trayClipVault'), click: () => openClipVault() }] : []),
+      ...(meeting?.trayItems() ?? []),
+      { type: 'separator' },
+      { label: t(L(), 'pillLangHead'), submenu: langItems().slice(1) },
+      { label: t(L(), 'pillPosition'), submenu: [...pos, { type: 'separator' }, { label: t(L(), 'pillPosTip'), enabled: false }] },
+      { label: t(L(), 'pillShow'), type: 'checkbox', checked: settings.pillAlwaysVisible, click: () => { setSettings({ pillAlwaysVisible: !settings.pillAlwaysVisible }); } },
+      { type: 'separator' },
+      { label: paused ? t(L(), 'resume') : t(L(), 'pause'), click: () => tray.togglePause() },
+      { label: t(L(), 'pillSettings'), click: () => openHub('settings') },
+    ]));
+  };
+
   // ── „Wort gelernt?“ card at the pill ──
   let cardId = 0;
   let cardRetry: NodeJS.Timeout | null = null;
+  // „Keine rechte Strg-Taste?“ (laptops with a Copilot key): shown at most once per run, never switches by itself
+  let hintCardId = -1;
+  let hintShown = false;
+  showHotkeyHint = (why: string) => {
+    if (settings.hotkey !== 'RightCtrl' || settings.hotkeyHintDone || hintShown || !pill.visible) return;
+    if (dictation.state !== 'idle') { setTimeout(() => showHotkeyHint(why), 3000).unref?.(); return; }
+    hintShown = true;
+    log(`hotkey hint shown (${why})`);
+    hintCardId = ++cardId;
+    hintOpen = true;
+    pill.card({
+      id: hintCardId, title: t(L(), 'hkHintTitle'), text: t(L(), 'hkHintText'),
+      options: [hotkeyShort(L(), 'CtrlWin'), 'Alt Gr'], save: t(L(), 'hkHintSave'), no: t(L(), 'hkHintNo'), timeoutMs: 45_000,
+    });
+  };
+  // no Copilot key event, but typing a lot and never a right Ctrl before the first dictation → same hint (once)
+  const hintStart = Date.now();
+  const hintTimer = setInterval(() => {
+    if (hintShown || settings.hotkeyHintDone || settings.hotkey !== 'RightCtrl' || Date.now() - hintStart > 30 * 60_000) { clearInterval(hintTimer); return; }
+    if (hotkeys && !hotkeys.rightCtrlSeen && hotkeys.keyCount >= 300 && history.records.length === 0 && Date.now() - hintStart > 2 * 60_000) showHotkeyHint('no right Ctrl yet');
+  }, 30_000);
+  hintTimer.unref?.();
   const showNextCard = () => {
     if (cardRetry) { clearTimeout(cardRetry); cardRetry = null; }
+    if (hintOpen) { cardRetry = setTimeout(showNextCard, 3000); return; }
     const p = learnQueue.current;
     if (!p) { pill.card(null); return; }
     // pill busy (dictation running) → later
@@ -378,6 +465,16 @@ async function main() {
   };
   onLearnCandidate = (items) => { if (learnQueue.add(items)) showNextCard(); };
   pill.onCardAnswer = (a) => {
+    if (a.id === hintCardId) {
+      hintOpen = false;
+      if (a.save) {
+        const hk = a.choice === 'Alt Gr' ? 'RightAlt' : 'CtrlWin';
+        setSettings({ hotkey: hk, hotkeyHintDone: true });
+        pill.toast(t(L(), 'hkHintSaved', { hotkey: hotkeyShort(L(), hk) }), 'success', 2600);
+      } else if (!a.timeout) setSettings({ hotkeyHintDone: true });
+      if (learnQueue.current) cardRetry = setTimeout(showNextCard, 600);
+      return;
+    }
     if (a.id !== cardId) return;
     const e = learnQueue.answer(a.save, a.choice);
     if (e) {

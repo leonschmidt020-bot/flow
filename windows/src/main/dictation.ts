@@ -60,6 +60,16 @@ export interface DictationDeps {
 
 const MAX_SECONDS = 10 * 60;
 
+/** diagnostics for the log line (no content): speech found, input level, mic start latency */
+export function diag(r: { speechSec: number; peakDb?: number; rmsDb?: number; gain?: number; fallback?: boolean }, mic: { lastStart?: { latencyMs: number; warm: boolean } }): string {
+  const p: string[] = typeof r.speechSec === 'number' ? [`speech ${r.speechSec.toFixed(1)} s`] : [];
+  if (r.peakDb !== undefined) p.push(`level peak ${r.peakDb} / rms ${r.rmsDb} dBFS` + (r.gain && r.gain > 1 ? ` (×${r.gain.toFixed(1)})` : ''));
+  if (r.fallback) p.push('no-vad');
+  const st = mic.lastStart;
+  if (st && st.latencyMs >= 0) p.push(`start ${st.latencyMs} ms${st.warm ? ' warm' : ' cold'}`);
+  return p.join(', ');
+}
+
 export class Dictation extends EventEmitter {
   state: DictState = 'idle';
   private startedAt = 0;
@@ -68,13 +78,23 @@ export class Dictation extends EventEmitter {
   /** started with the hotkey (not the pill) → the mouse target may be used */
   private viaKey = false;
   private capture: CaptureResult | null = null;
-  constructor(private d: DictationDeps) { super(); }
+  /** recording, but no audio arrived yet (cold mic) – the pill shows a dimmed „wait“ until it flows */
+  private micWait = false;
+  constructor(private d: DictationDeps) {
+    super();
+    d.mic.on?.('flowing', () => {
+      if (!this.micWait) return;
+      this.micWait = false;
+      if (this.state === 'recording' || this.state === 'handsfree') this.d.pill.state({ micWait: false });
+    });
+  }
 
   private L() { return this.d.settings().locale; }
   private set(s: DictState) {
     this.state = s;
     const mode = s === 'recording' ? 'recording' : s === 'handsfree' ? 'handsfree' : s === 'transcribing' || s === 'inserting' ? 'transcribing' : 'idle';
-    this.d.pill.state({ mode, alwaysVisible: this.d.settings().pillAlwaysVisible });
+    if (s !== 'recording' && s !== 'handsfree') this.micWait = false;
+    this.d.pill.state({ mode, alwaysVisible: this.d.settings().pillAlwaysVisible, micWait: this.micWait });
     this.emit('state', s);
   }
 
@@ -88,14 +108,16 @@ export class Dictation extends EventEmitter {
       this.d.pill.toast(t(this.L(), st === 'missing' || st === 'error' ? 'toastNoModel' : 'toastModelLoading'), 'info');
       return;
     }
+    const pressAt = Date.now();
     this.app = this.d.foregroundExe();
-    this.startedAt = Date.now();
+    this.startedAt = pressAt;
     this.viaKey = viaKey;
     this.capture = null;
+    this.micWait = true;
     this.set('recording');
     if (viaKey && this.d.settings().mouseTarget) this.d.mouse?.beginTracking();
     try {
-      await this.d.mic.start(this.d.settings().micDeviceId);
+      await this.d.mic.start(this.d.settings().micDeviceId, pressAt);
     } catch (e) {
       log('mic start failed', e);
       this.cancel();
@@ -153,7 +175,7 @@ export class Dictation extends EventEmitter {
       if (ap && s.agentPrompts !== 'off') {
         const cleaned = applyRules(r.text.trim(), s);
         if (cleaned && ap.consume(cleaned, { duration: sec, exe: this.app, cap })) {
-          log(`dictation: ${sec.toFixed(1)} s audio, asr ${r.ms} ms, ${wordCount(cleaned)} words, app ${this.app || '?'} → Agent-Prompt`);
+          log(`dictation: ${sec.toFixed(1)} s audio, asr ${r.ms} ms, ${wordCount(cleaned)} words, app ${this.app || '?'} · ${diag(r, this.d.mic)} → Agent-Prompt`);
           this.emit('agentPrompt');
           return;
         }
@@ -162,7 +184,7 @@ export class Dictation extends EventEmitter {
         removeFillers: s.removeFillers, voiceCommands: s.voiceCommands, dictionary: s.dictionary, polish: s.polish,
         target: targetForExe(this.app),
       });
-      log(`dictation: ${sec.toFixed(1)} s audio, asr ${r.ms} ms, ${r.segments} chunk(s), ${wordCount(text)} words, app ${this.app || '?'}` + (logText ? ` → ${text}` : ''));
+      log(`dictation: ${sec.toFixed(1)} s audio, asr ${r.ms} ms, ${r.segments} chunk(s), ${wordCount(text)} words, app ${this.app || '?'} · ${diag(r, this.d.mic)}` + (logText ? ` → ${text}` : ''));
       if (!text) { this.set('idle'); this.d.pill.toast(t(this.L(), 'toastNothing'), 'info', 1600); return; }
       this.state = 'inserting';
       await this.d.waitKeysReleased();

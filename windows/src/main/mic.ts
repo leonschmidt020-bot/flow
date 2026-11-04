@@ -13,6 +13,10 @@ export class Mic extends EventEmitter {
   private readyP: Promise<void> | null = null;
   private gen = 0;
   lastError = '';
+  /** press → first audio of the current/last recording (ms) and whether the mic was still open (warm) */
+  private pressAt = 0;
+  private gotAudio = false;
+  lastStart: { latencyMs: number; warm: boolean; openMs: number } = { latencyMs: -1, warm: false, openMs: -1 };
 
   private ensure(): Promise<void> {
     if (this.readyP && this.win && !this.win.isDestroyed()) return this.readyP;
@@ -28,6 +32,11 @@ export class Mic extends EventEmitter {
     ipcMain.on('mic:chunk', (_e: IpcMainEvent, buf: Float32Array | ArrayBuffer) => {
       if (!this.recording) return;
       this.chunks.push(buf instanceof Float32Array ? buf : new Float32Array(buf));
+      if (!this.gotAudio) {
+        this.gotAudio = true;
+        this.lastStart.latencyMs = Date.now() - this.pressAt;
+        this.emit('flowing', this.lastStart);
+      }
     });
     ipcMain.on('mic:level', (_e, lv: number) => this.emit('level', lv));
     ipcMain.on('mic:error', (_e, err: { name: string; message: string }) => {
@@ -36,13 +45,23 @@ export class Mic extends EventEmitter {
       this.emit('error', err);
     });
     ipcMain.on('mic:stopped', () => this.emit('stopped'));
-    ipcMain.on('mic:started', (_e, info: { label: string; sampleRate: number }) => { log('mic started', info); this.emit('started', info); });
+    ipcMain.on('mic:started', (_e, info: { label: string; sampleRate: number; warm?: boolean; openMs?: number }) => {
+      this.lastStart.warm = info.warm === true;
+      this.lastStart.openMs = typeof info.openMs === 'number' ? info.openMs : -1;
+      // a warm start is not worth a log line each time (the dictation line carries the latency)
+      if (!info.warm) log('mic started', info);
+      this.emit('started', info);
+    });
   }
 
   warm() { void this.ensure(); }
 
-  async start(deviceId: string): Promise<void> {
+  /** `pressAt`: when the key went down (Date.now()) – for the start-latency measurement */
+  async start(deviceId: string, pressAt = Date.now()): Promise<void> {
     const g = ++this.gen;
+    this.pressAt = pressAt;
+    this.gotAudio = false;
+    this.lastStart = { latencyMs: -1, warm: false, openMs: -1 };
     await this.ensure();
     if (g !== this.gen) return; // cancelled while the capture page was loading
     this.chunks = [];
@@ -76,6 +95,8 @@ export class Mic extends EventEmitter {
 
   /** level meter for the settings page (no recording) */
   async monitor(on: boolean, deviceId: string) {
+    // the hub closing during a dictation must not stop the recording
+    if (this.recording) return;
     await this.ensure();
     this.win?.webContents.send(on ? 'mic:monitor' : 'mic:stop', { deviceId });
   }

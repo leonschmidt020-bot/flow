@@ -198,7 +198,7 @@ final class CommandMode {
                 stillThere = now.location == r.location && now.length == r.length
             }
         }
-        guard stillThere, AXIsProcessTrusted(), !IsSecureEventInputEnabled() else {
+        guard stillThere, AXIsProcessTrusted(), !SecureInput.blocks() else {
             // Ergebnis nicht verlieren: normal in die Zwischenablage (sichtbar in ClipVault)
             Inserter.copy(text, source: "Command Mode")
             log("Command Mode: Ziel geändert – nur Zwischenablage")

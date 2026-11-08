@@ -31,15 +31,30 @@ enum Inserter {
         }
         lastInsert = (text, app, Date())
         let pb = NSPasteboard.general
-        if IsSecureEventInputEnabled() {
-            // Passwortfeld: als „verborgen/vorübergehend“ markieren (ClipVault & Co. speichern das nicht), nach 30 s leeren
+        if SecureInput.blocks() {
+            // Sichere Eingabe aktiv (Passwortfeld – oder ein Passwort-/Touch-ID-Dialog bzw. ein Programm im Hintergrund hält
+            // sie fest). Vorfall 08.11.2026: Diktate in VS Code landeten deshalb „nur in der Zwischenablage“. Jetzt: trotzdem
+            // dort einfügen, wo der Cursor steht – aber verborgen (ClipVault & Co. speichern nichts), danach die alte
+            // Zwischenablage zurücklegen bzw. nach 30 s leeren.
+            let saved = snapshot(pb)
+            FlowPasteboard.noteOwnWrite()
             pb.clearContents()
             pb.setString(text, forType: .string)
             pb.setString("", forType: NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType"))
             pb.setString("", forType: NSPasteboard.PasteboardType("org.nspasteboard.TransientType"))
             let count = pb.changeCount
-            DispatchQueue.main.asyncAfter(deadline: .now() + 30) { if pb.changeCount == count { pb.clearContents() } }
-            return .copiedOnly(reason: "Passwortfeld – 30 s in Zwischenablage")
+            guard accessibilityTrusted else {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 30) { if pb.changeCount == count { pb.clearContents() } }
+                log("Einfügen: sichere Eingabe (\(SecureInput.summary())), Bedienungshilfen fehlen – nur Zwischenablage")
+                return .copiedOnly(reason: "Bedienungshilfen fehlen – 30 s in Zwischenablage")
+            }
+            pressCmdV()
+            log("Einfügen trotz sicherer Eingabe (\(SecureInput.summary())) – verborgen eingefügt")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                guard pb.changeCount == count else { return }
+                if saved.isEmpty { pb.clearContents() } else { restore(saved, into: pb) }
+            }
+            return .pasted
         }
         let saved = Settings.shared.keepInClipboard ? nil : snapshot(pb)
         FlowPasteboard.noteOwnWrite()

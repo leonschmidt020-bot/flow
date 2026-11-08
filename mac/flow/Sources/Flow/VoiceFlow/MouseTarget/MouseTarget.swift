@@ -307,7 +307,7 @@ final class MouseTarget: @unchecked Sendable {
             return
         }
         if t.alreadyFocused { done(MTPrepared(method: "0", note: "Maus über dem aktiven Fenster", extraMs: 0, target: t, toast: nil)); return }
-        if IsSecureEventInputEnabled() { done(.skip("sichere Eingabe aktiv")); return }
+        if SecureInput.blocks() { done(.skip("sichere Eingabe aktiv")); return }
         queue.async {
             let r = MouseTarget.focusAndPick(t)
             DispatchQueue.main.async { done(r) }
@@ -415,7 +415,7 @@ final class MouseTarget: @unchecked Sendable {
             // Terminals/xterm verarbeiten ⌘V asynchron (Bracketed Paste) – kurz Luft lassen, sonst kommt Enter zu früh
             let waited = Date().timeIntervalSince(t0)
             if ok == nil, waited < 0.18 { usleep(useconds_t((0.18 - waited) * 1_000_000)) }
-            guard MouseTarget.frontmost().pid == expectPid, !hotkeyHeld(), !IsSecureEventInputEnabled() else {
+            guard MouseTarget.frontmost().pid == expectPid, !hotkeyHeld(), !SecureInput.blocks(pid: expectPid) else {
                 DispatchQueue.main.async { done("kein Enter: Fokus/Taste geändert") }; return
             }
             MTFocus.pressReturn()

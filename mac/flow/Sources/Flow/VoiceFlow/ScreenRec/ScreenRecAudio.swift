@@ -1,7 +1,7 @@
 import AppKit
 import AVFoundation
 
-/// „MP3 → Downloads“ (16.11.2026): nur der Ton einer Bildschirmaufnahme als Datei in „Downloads“.
+/// „Als MP3“ (16.11.2026): nur der Ton einer Bildschirmaufnahme als Datei in „Downloads“.
 /// MP3 mit ffmpeg aus Homebrew (macOS selbst kann kein MP3 schreiben); ohne ffmpeg als M4A (AAC) – spielt überall.
 /// Das Video bleibt unverändert. Die Tondatei liegt danach auch in der Zwischenablage (⌘V) und wird im Finder gezeigt.
 enum ScreenRecAudio {

@@ -497,6 +497,15 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         if cal.isDateInYesterday(d) { return "Gestern" }
         return dayFmt.string(from: d)
     }
+    /// 16.11.2026: viele angeheftete Einträge → man musste weit scrollen. Klick auf „ANGEHEFTET“ klappt sie ein
+    /// bzw. aus (gemerkt). Beim Suchen sind sie immer sichtbar, damit kein Treffer versteckt bleibt.
+    var pinnedCollapsed: Bool {
+        get { UserDefaults.standard.bool(forKey: "pinnedCollapsed") }
+        set { UserDefaults.standard.set(newValue, forKey: "pinnedCollapsed") }
+    }
+    var pinnedHidden: Bool { pinnedCollapsed && search.stringValue.isEmpty }
+    var pinnedCount = 0
+    @objc func togglePinnedCollapsed() { pinnedCollapsed.toggle(); reload() }
     func buildDisplay() {
         display = []
         defer {
@@ -513,7 +522,8 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
                 passesType(s) && (q.isEmpty || (s.text ?? "").lowercased().contains(q) || (s.fileName ?? "").lowercased().contains(q))
             }
             let pinned = list.filter { $0.pinned }
-            if !pinned.isEmpty { display.append(.header("Angeheftet")); pinned.forEach { display.append(.shared($0)) } }
+            pinnedCount = pinned.count
+            if !pinned.isEmpty { display.append(.header("Angeheftet")); if !pinnedHidden { pinned.forEach { display.append(.shared($0)) } } }
             var lastKey = ""
             for s in list where !s.pinned {
                 let key = String(Int(Calendar.current.startOfDay(for: s.updatedAt).timeIntervalSince1970))
@@ -535,8 +545,9 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
         let hist = filtered.filter { $0.collection == nil }
         let pinned = hist.filter { $0.pinned }
         if !pinned.isEmpty {
+            pinnedCount = pinned.count
             display.append(.header("Angeheftet"))
-            for it in pinned { display.append(.item(it)) }
+            if !pinnedHidden { for it in pinned { display.append(.item(it)) } }
         }
         var lastKey = ""
         for it in hist where !it.pinned {
@@ -733,8 +744,22 @@ final class PanelController: NSObject, NSTableViewDataSource, NSTableViewDelegat
             pv.contentTintColor = NSColor.systemYellow
             v.addSubview(pv); lx = 34
         }
-        let l = NSTextField(labelWithString: title.uppercased())
+        let l = NSTextField(labelWithString: pinned ? "ANGEHEFTET · \(pinnedCount)" : title.uppercased())
         l.frame = NSRect(x: lx, y: 9, width: leftW-44-lx, height: 16)
+        if pinned {
+            // ganze Zeile klickbar: ein-/ausklappen, Pfeil rechts zeigt den Zustand
+            let hidden = pinnedHidden
+            let ch = NSImageView(frame: NSRect(x: leftW-24-30, y: 10, width: 12, height: 12))
+            ch.image = NSImage(systemSymbolName: hidden ? "chevron.right" : "chevron.down", accessibilityDescription: nil)?
+                .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 9, weight: .bold))
+            ch.contentTintColor = NSColor.systemYellow.withAlphaComponent(0.85)
+            v.addSubview(ch)
+            let b = NSButton(frame: v.bounds)
+            b.isTransparent = true; b.title = ""; b.target = self; b.action = #selector(togglePinnedCollapsed)
+            b.toolTip = hidden ? "Angeheftete einblenden" : "Angeheftete ausblenden"
+            b.autoresizingMask = [.width, .height]
+            v.addSubview(b)
+        }
         l.font = .systemFont(ofSize: 10.5, weight: .semibold)
         l.textColor = pinned ? NSColor.systemYellow.withAlphaComponent(0.85) : NSColor.white.withAlphaComponent(0.45)
         v.addSubview(l); return v

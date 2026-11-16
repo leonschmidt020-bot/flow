@@ -320,7 +320,8 @@ final class VFNotify {
             : CGFloat(n.thumbnails.count) * (VFThumbStrip.size + 5) + (n.thumbnailMore > 0 ? VFThumbStrip.size + 11 : 0)
         // Schalter: Symbol + Text + Schiebeschalter + Ränder (12 + 12 + 7 + Text + 7 + 30 + 6) + etwas Luft
         let toggle: CGFloat = n.toggle.map { w($0.label, .medium) + 82 } ?? 0
-        let width = min(maxCardWidth, max(minCardWidth, max(buttons, chips, thumbs, toggle) + chrome))
+        // Vier Chips („… · Als MP3“) waren breiter als die Karte – für die Chip-Zeile darf sie bis 640 pt breit werden.
+        let width = max(min(maxCardWidth, max(minCardWidth, max(buttons, thumbs, toggle) + chrome)), min(640, chips + chrome))
         return NSSize(width: width, height: cardHeight + (n.choices.count > 1 ? chipRow : 0) + (n.toggle != nil ? chipRow : 0) + (n.chip != nil ? kindRow : 0)
                                      + (n.thumbnails.isEmpty ? 0 : VFThumbStrip.height)
                                      + VFThumbStrip.captionHeight(n.thumbnailCaption))

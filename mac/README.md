@@ -29,7 +29,7 @@ ist. Dazu kommt **ClipVault**, ein Zwischenablage-Verlauf (⌘⇧V). Beide laufe
   (lokales Transkript mit Zeitmarken, Schlüsselbilder bei Klicks/Satzanfängen, Mausspur-Bilder als Text-Liste für
   Claude Code & Co.; wer sofort ⌘V drückt, bekommt trotzdem alles – das Einfügen wartet, bis der Kontext fertig ist)
   oder „Als Auftrag“ (mit Claude-CLI: Claude schreibt aus Video, Bildern und Transkript einen Auftrag).
-  „MP3 → Downloads“ (nur bei Aufnahmen mit Ton) speichert allein den Ton als MP3 in „Downloads“ – mit ffmpeg aus
+  „Als MP3“ (nur bei Aufnahmen mit Ton) speichert allein den Ton als MP3 in „Downloads“ – mit ffmpeg aus
   Homebrew, sonst als M4A.
   Gespeichert wird im Ordner der macOS-Bildschirmfotos (sonst Schreibtisch), Bilder in „<Video> – Bilder“.
   Kontrollzentrum-Knopf: Systemeinstellungen → Kontrollzentrum bzw. „Steuerelemente bearbeiten“ → „Bildschirm aufnehmen

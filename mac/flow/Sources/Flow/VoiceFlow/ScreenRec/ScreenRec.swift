@@ -35,7 +35,7 @@ enum ScreenRecSound: String, CaseIterable {
 enum ScreenRecCopy: String, CaseIterable {
     case video = "Nur Video", withContext = "Mit Kontext", task = "Als Auftrag"
     /// 16.11.2026: nur der Ton der Aufnahme als MP3 direkt in „Downloads“ (z. B. ein Lied mit Systemton)
-    case audio = "MP3 → Downloads"
+    case audio = "Als MP3"
     /// Kurz, damit die Chips in die Karte passen; was „Kontext“ ist, sagt der Kartentext
     static func label(_ c: ScreenRecCopy, sound: ScreenRecSound) -> String { c.rawValue }
     /// Wahlen der Fertig-Karte: „MP3“ nur, wenn Ton aufgenommen wurde
@@ -1702,7 +1702,7 @@ enum ScreenRecDev {
         check(card.title == "Aufnahme fertig · 1:23", "Titel mit Laufzeit: \(card.title)")
         check(card.primary?.0 == "Kopieren" && card.secondary?.0 == "Nochmal", "Knöpfe Kopieren · Nochmal")
         check(card.text.contains("Externer Monitor") && card.text.contains("Mikrofon") && card.text.contains("gespeichert"), "sofort: Bildschirm, Ton, „wird gespeichert“")
-        check(card.choices == ["Nur Video", "Mit Kontext", "Als Auftrag", "MP3 → Downloads"] && card.preselect == 1, "Kopier-Wahl: Video · Kontext · Auftrag · MP3, Kontext vorgewählt")
+        check(card.choices == ["Nur Video", "Mit Kontext", "Als Auftrag", "Als MP3"] && card.preselect == 1, "Kopier-Wahl: Video · Kontext · Auftrag · MP3, Kontext vorgewählt")
         rd.fileReady()
         card = ScreenRec.doneNotice(rd, copy: {}, again: {})
         check(card.text.contains("Transkript und Bilder werden erstellt"), "danach: Kontext läuft")

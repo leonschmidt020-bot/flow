@@ -34,8 +34,12 @@ enum ScreenRecSound: String, CaseIterable {
 /// auch das Transkript)
 enum ScreenRecCopy: String, CaseIterable {
     case video = "Nur Video", withContext = "Mit Kontext", task = "Als Auftrag"
-    /// Kurz, damit drei Chips in die Karte passen; was „Kontext“ ist, sagt der Kartentext
+    /// 16.11.2026: nur der Ton der Aufnahme als MP3 direkt in „Downloads“ (z. B. ein Lied mit Systemton)
+    case audio = "MP3 → Downloads"
+    /// Kurz, damit die Chips in die Karte passen; was „Kontext“ ist, sagt der Kartentext
     static func label(_ c: ScreenRecCopy, sound: ScreenRecSound) -> String { c.rawValue }
+    /// Wahlen der Fertig-Karte: „MP3“ nur, wenn Ton aufgenommen wurde
+    static func choices(sound: ScreenRecSound) -> [ScreenRecCopy] { allCases.filter { $0 != .audio || sound != .none } }
 }
 
 final class ScreenRec: NSObject, SCRecordingOutputDelegate, SCStreamDelegate {
@@ -820,7 +824,7 @@ final class ScreenRec: NSObject, SCRecordingOutputDelegate, SCStreamDelegate {
         // automatisch gestoppt (Speicher, Ruhezustand, Sperre): Karte bleibt, bis man zurück ist
         n.timeout = d.stopReason == nil ? 45 : nil
         n.onClose = closed
-        n.choices = ScreenRecCopy.allCases.map { ScreenRecCopy.label($0, sound: d.sound) }
+        n.choices = ScreenRecCopy.choices(sound: d.sound).map { ScreenRecCopy.label($0, sound: d.sound) }
         n.preselect = 1   // für den Agent: Kontext ist meist gewollt
         if let t = d.thumbnail { n.thumbnails = [t] }
         n.thumbnailCaption = d.url.lastPathComponent
@@ -1031,7 +1035,8 @@ final class ScreenRecDone {
         if mode == .task {
             showTaskCard()
         } else if !ready {
-            ScreenRec.shared.pill?.view.showToast("Video wird noch gespeichert – kopiere gleich …", seconds: 2.5)
+            ScreenRec.shared.pill?.view.showToast(mode == .audio ? "Video wird noch gespeichert – MP3 kommt gleich …"
+                                                                 : "Video wird noch gespeichert – kopiere gleich …", seconds: 2.5)
         }
         if ready && mode == .task { earlyCopy = ScreenRec.shared.copy(url, quiet: true) }
         if ready && mode == .withContext && context == nil { promiseCopy() }
@@ -1050,6 +1055,7 @@ final class ScreenRecDone {
 
     private func tryCopy() {
         guard let m = pendingCopy, ready else { return }
+        if m == .audio { pendingCopy = nil; ScreenRecAudio.saveToDownloads(video: url); return }
         if m == .withContext && context == nil && clip == nil { promiseCopy() }   // Datei wurde gerade fertig
         if m == .task && earlyCopy == nil { earlyCopy = ScreenRec.shared.copy(url, quiet: true) }
         if (m == .withContext || m == .task) && context == nil { return }
@@ -1696,12 +1702,15 @@ enum ScreenRecDev {
         check(card.title == "Aufnahme fertig · 1:23", "Titel mit Laufzeit: \(card.title)")
         check(card.primary?.0 == "Kopieren" && card.secondary?.0 == "Nochmal", "Knöpfe Kopieren · Nochmal")
         check(card.text.contains("Externer Monitor") && card.text.contains("Mikrofon") && card.text.contains("gespeichert"), "sofort: Bildschirm, Ton, „wird gespeichert“")
-        check(card.choices == ["Nur Video", "Mit Kontext", "Als Auftrag"] && card.preselect == 1, "Kopier-Wahl: Video · Kontext · Auftrag, Kontext vorgewählt")
+        check(card.choices == ["Nur Video", "Mit Kontext", "Als Auftrag", "MP3 → Downloads"] && card.preselect == 1, "Kopier-Wahl: Video · Kontext · Auftrag · MP3, Kontext vorgewählt")
         rd.fileReady()
         card = ScreenRec.doneNotice(rd, copy: {}, again: {})
         check(card.text.contains("Transkript und Bilder werden erstellt"), "danach: Kontext läuft")
         let sysD = ScreenRecDone(url: url, duration: 5, screen: "X", sound: .system)
-        check(ScreenRec.doneNotice(sysD, copy: {}, again: {}).choices.count == 3, "ohne Mikro: dieselben drei Wahlen")
+        check(ScreenRec.doneNotice(sysD, copy: {}, again: {}).choices.count == 4, "Systemton: dieselben vier Wahlen")
+        let muteD = ScreenRecDone(url: url, duration: 5, screen: "X", sound: .none)
+        check(ScreenRec.doneNotice(muteD, copy: {}, again: {}).choices == ["Nur Video", "Mit Kontext", "Als Auftrag"], "ohne Ton: kein MP3-Chip")
+        check(ScreenRecAudio.freeURL(dir: URL(fileURLWithPath: "/nonexistent-flow"), base: "a", ext: "mp3").lastPathComponent == "a.mp3", "MP3-Name ohne Zusatz, wenn frei")
         // Klick-Kontext als Text
         let ci = ScreenRecClickInfo(t: 12.4, label: "Speichern", role: "Taste", app: "Safari", window: "Rechnung März")
         check(ci.text == "Klick auf „Speichern“ (Taste) · Safari – „Rechnung März“", "Klick-Text: \(ci.text)")

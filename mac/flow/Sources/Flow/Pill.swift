@@ -139,7 +139,7 @@ final class PillView: NSView {
 
     private var targetSize: NSSize {
         switch mode {
-        case .idle: return hover ? NSSize(width: textWidth(languageShort, size: 11, weight: .semibold) + 44, height: 24) : NSSize(width: 44, height: 9)
+        case .idle: return hover ? NSSize(width: hoverWidth, height: 24) : NSSize(width: 44, height: 9)
         case .listening, .transcribing: return NSSize(width: 66, height: 24)
         case .command, .commandWorking, .agentPrompt: return NSSize(width: 84, height: 24)
         case .handsFree: return NSSize(width: 112, height: 26)
@@ -266,7 +266,10 @@ final class PillView: NSView {
     /// Ruhende Pille ohne Maus (hochkant am Seitenrand)
     var restRectInScreen: NSRect { rectInScreen(for: vertical ? NSSize(width: 9, height: 44) : NSSize(width: 44, height: 9)) }
     /// Ruhende Pille mit Maus (waagerecht, Weltkugel + Sprache) in voller Größe
-    var hoverRectInScreen: NSRect { rectInScreen(for: NSSize(width: textWidth(languageShort, size: 11, weight: .semibold) + 44, height: 24)) }
+    /// Breite der Ruhe-Pille beim Drüberfahren: 🌐 + Sprache, bei „alle Stimmen“ zusätzlich Platz für das Personen-Symbol
+    /// (sonst lag das Symbol auf dem Text „DE+EN“)
+    private var hoverWidth: CGFloat { textWidth(languageShort, size: 11, weight: .semibold) + 44 + (allVoices ? 20 : 0) }
+    var hoverRectInScreen: NSRect { rectInScreen(for: NSSize(width: hoverWidth, height: 24)) }
     /// Maus gerade über der Pille (vom PillController gesetzt, mit Hysterese) – EINE Quelle für Pille, Listen und Rahmen
     var isHovered: Bool { hover }
 

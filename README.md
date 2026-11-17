@@ -23,6 +23,7 @@ Dazu gehört **ClipVault**, ein Verlauf für die Zwischenablage mit Suche, Bilde
 **Windows:** Auf der [Releases-Seite](https://github.com/leonschmidt020-bot/flow/releases) `Flow-Setup-….exe` laden und starten.
 Der Installer ist (noch) nicht signiert – wenn SmartScreen warnt: **Weitere Informationen → Trotzdem ausführen**.
 Beim ersten Start lädt Flow das Sprachmodell einmalig (~490 MB), danach geht alles offline.
+**Schritt-für-Schritt-Anleitung mit Bildschirm-Meldungen: [windows/ANLEITUNG.md](windows/ANLEITUNG.md).**
 Details: [windows/README.md](windows/README.md).
 
 **Mac:** Im Terminal:

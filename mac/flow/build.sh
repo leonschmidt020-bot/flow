@@ -103,6 +103,10 @@ else
   rc=$?
   set -e
   grep -E "error:|Build complete" .build-log.txt | tail -20 || true
+  # Fehlende SwiftUI-Makros = kein volles Xcode: den echten Grund nennen (die letzte ✗-Zeile landet in der Update-Meldung)
+  if [ $rc -ne 0 ] && grep -q "plugin for module 'SwiftUIMacros' not found" .build-log.txt; then
+    echo "✗ Kein volles Xcode – bitte Xcode aus dem App Store installieren und einmal öffnen (die Command Line Tools reichen hier nicht)"; exit 1
+  fi
   if [ $rc -ne 0 ]; then echo "✗ Build fehlgeschlagen (swift build, Details: ${SRC}/.build-log.txt)"; exit 1; fi
   # flow (Kommandozeile/Fernsteuerung) – kleine eigene Binary
   swiftc -O tools/flow.swift -o .build/flow-cli 2>/dev/null || echo "⚠︎  Kommandozeile „flow“ nicht gebaut (weiter ohne)"

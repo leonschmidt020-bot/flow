@@ -80,6 +80,7 @@ if [ -n "$PREBUILT" ]; then
   if [ -x "$PREBUILT/../flow-cli" ]; then cp "$PREBUILT/../flow-cli" .build/flow-cli; fi
 else
   echo "» Baue Flow $VERSION ($GIT_DESC) …"
+  SWIFT_EXTRA=()
   # Die reinen Command Line Tools haben die SwiftUI-Makros nicht („plugin for module 'SwiftUIMacros' not found“) –
   # zeigt xcode-select dorthin und ist ein volles Xcode installiert, nimmt der Bau dieses (nur für diesen Lauf).
   if [ -z "${DEVELOPER_DIR:-}" ]; then
@@ -93,13 +94,24 @@ else
           break
         fi
       done
+      # Kein volles Xcode (z. B. macOS 27 + Command Line Tools 27): gegen das mitgelieferte macOS-26-SDK bauen – dort ist
+      # @State noch ein Property-Wrapper (kein Makro). @Generable (FoundationModels) bleibt ein Makro → FMPolish nimmt mit
+      # MURMUR_NO_FM_MACROS den Weg ohne gelenkte Ausgabe.
+      if [ -z "${DEVELOPER_DIR:-}" ] && [ -z "${SDKROOT:-}" ]; then
+        _sdk="$(ls -d "$_dev"/SDKs/MacOSX26*.sdk 2>/dev/null | sort -V | tail -1 || true)"
+        if [ -n "$_sdk" ]; then
+          export SDKROOT="$_sdk"
+          SWIFT_EXTRA=(-Xswiftc -DMURMUR_NO_FM_MACROS)
+          echo "  (kein volles Xcode – baue mit Command Line Tools gegen $(basename "$_sdk"))"
+        fi
+      fi
     fi
   fi
   # Leerzeichen im Pfad (z. B. iCloud-„Dokumente – <Mac>“) kann swift build abbrechen lassen
   case "$(pwd)" in *" "*) echo "⚠︎ Projektpfad enthält Leerzeichen ($(pwd)) – swift build kann daran scheitern. Besser z. B. nach ~/Developer verschieben.";; esac
   inst_heal_moved_build "$(pwd)" >/dev/null || echo "⚠︎ Alter Bauordner ließ sich nicht beiseitelegen – Build kann scheitern"
   set +e
-  swift build -c release > .build-log.txt 2>&1
+  swift build -c release ${SWIFT_EXTRA[@]+"${SWIFT_EXTRA[@]}"} > .build-log.txt 2>&1
   rc=$?
   set -e
   grep -E "error:|Build complete" .build-log.txt | tail -20 || true

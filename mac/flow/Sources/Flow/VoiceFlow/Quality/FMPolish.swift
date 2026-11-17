@@ -51,13 +51,33 @@ enum FMPolish {
     }
 
     #if canImport(FoundationModels)
+    #if !MURMUR_NO_FM_MACROS
     @Generable
     struct Cleaned {
         @Guide(description: "Der bereinigte Diktat-Text, sonst unverändert")
         var text: String
     }
+    #endif
 
     private static let lock = NSLock()
+
+    /// Freie Antwort (Bau ohne FoundationModels-Makros): Einleitung („Hier ist der bereinigte Text:“), <diktat>-Hülle
+    /// und umschließende Anführungszeichen entfernen – der eigentliche Text bleibt unverändert.
+    static func stripPreamble(_ raw: String) -> String {
+        var t = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lines = t.components(separatedBy: "\n")
+        // nur echte Einleitungen – eine diktierte Überschrift („Einkaufsliste:“) bleibt stehen
+        let intro = ["hier ist", "hier der", "here is", "bereinigte", "korrigierte", "überarbeitete"]
+        if lines.count > 1, let first = lines.first?.trimmingCharacters(in: .whitespaces), first.hasSuffix(":"), first.count < 80,
+           intro.contains(where: { first.lowercased().contains($0) }) {
+            t = lines.dropFirst().joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if t.hasPrefix("<diktat>"), t.hasSuffix("</diktat>") { t = String(t.dropFirst(8).dropLast(9)) }
+        for (o, c) in [("\"", "\""), ("„", "“"), ("»", "«")] where t.count > 2 && t.hasPrefix(o) && t.hasSuffix(c) {
+            t = String(t.dropFirst().dropLast()); break
+        }
+        return t.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
     nonisolated(unsafe) private static var warm: LanguageModelSession?
     #endif
 
@@ -93,8 +113,14 @@ enum FMPolish {
         let maxTokens = min(1500, Int(Double(text.count) / 3.0) + 40)
         let options = GenerationOptions(sampling: .greedy, maximumResponseTokens: maxTokens)
         let out: String? = await Deadline.run(seconds: timeout) {
+            #if MURMUR_NO_FM_MACROS
+            // Bau ohne Xcode hat kein FoundationModelsMacros-Plugin → freie Antwort statt @Generable
+            let r = try await session.respond(to: prompt + "\nAntworte nur mit dem bereinigten Text, ohne Einleitung.", options: options)
+            return FMPolish.stripPreamble(r.content)
+            #else
             let r = try await session.respond(to: prompt, generating: Cleaned.self, includeSchemaInPrompt: false, options: options)
             return r.content.text
+            #endif
         }
         guard let out else { return nil }
         return (out.trimmingCharacters(in: .whitespacesAndNewlines), Int(Date().timeIntervalSince(t0) * 1000))

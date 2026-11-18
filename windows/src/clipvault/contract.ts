@@ -35,6 +35,8 @@ export interface ClipVaultContext {
 
 export interface ClipVaultHandle {
   openPanel(): void;
+  /** put a text into the shared vault (error report). 'off' = sync off, 'unpaired' = no vault yet */
+  shareText?(text: string): Promise<'sent' | 'queued' | 'off' | 'unpaired'>;
   dispose(): void | Promise<void>;
 }
 

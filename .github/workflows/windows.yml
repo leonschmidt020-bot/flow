@@ -47,6 +47,11 @@ jobs:
       - name: Unit tests
         run: npm test
 
+      - name: ClipVault sync test (local worker via wrangler dev, 4 devices, never a real vault)
+        run: |
+          npm ci --prefix ../mac/clipvault/sync-worker
+          npm run test:sync
+
       - name: Cache speech models
         uses: actions/cache@v4
         with:
@@ -158,3 +163,7 @@ jobs:
           cache-dependency-path: windows/package-lock.json
       - run: npm ci
       - run: npm test
+      - name: ClipVault sync test (local worker, 4 devices)
+        run: |
+          npm ci --prefix ../mac/clipvault/sync-worker
+          npm run test:sync

@@ -23,7 +23,8 @@ import { HotkeyService } from './hotkeyService';
 import { Dictation } from './dictation';
 import { electronClipboard, memoryClipboard } from './clipboardPort';
 import type { KeySender, InsertPhase } from './insert/inserter';
-import { initUpdater, checkForUpdates, scheduleUpdates } from './updater';
+import { initUpdater, checkForUpdates, scheduleUpdates, latestVersion } from './updater';
+import { ErrorReporter, reporterStateFile } from './errorReporter';
 import { initClipVault } from '../clipvault/main';
 import type { ClipVaultHandle, FlowClipboardWrite } from '../clipvault/contract';
 import { runRenderCheck } from './renderCheck';
@@ -301,6 +302,23 @@ async function main() {
   if (settings.clipVault) await startClipVault();
   else log('clipvault: off (settings)');
 
+  // ── error reports into the shared vault (opt-in, src/main/errorReport.ts) ──
+  const reporter = new ErrorReporter({
+    stateFile: reporterStateFile(paths.userData), version: VERSION,
+    enabled: () => settings.errorReports,
+    hotkey: () => settings.hotkey,
+    model: () => ({ status: asr.state.status, error: asr.state.error || undefined }),
+    latestVersion,
+    share: () => (cv?.shareText ? (text: string) => cv!.shareText!(text) : null),
+  });
+  reporter.start();
+  const sendReportNow = async () => {
+    const r = await reporter.send('manual');
+    const key = r === 'sent' || r === 'queued' ? 'reportSent' : r === 'unpaired' || r === 'off' ? 'reportNoVault' : 'reportFailed';
+    pill.toast(t(settings.locale, key), r === 'sent' || r === 'queued' ? 'success' : 'error', 3500);
+    return r;
+  };
+
   // ── tray ──
   openClipVault = () => { if (cv) cv.openPanel(); else openHub('clipvault'); };
   const tray = new FlowTray({
@@ -318,6 +336,7 @@ async function main() {
       pushState();
     },
     checkUpdates: () => void checkForUpdates(),
+    sendReport: () => void sendReportNow(),
     quit: () => app.quit(),
   });
   if (!flag('smoke')) { tray.create(); tray.update(settings.locale, settings.hotkey, paused); }
@@ -495,6 +514,7 @@ async function main() {
   ipcMain.handle('hub:mic:devices', () => mic.devices());
   ipcMain.handle('hub:mic:monitor', (_e, on: boolean) => mic.monitor(!!on && !mic.isRecording, settings.micDeviceId));
   ipcMain.handle('hub:checkUpdates', () => checkForUpdates());
+  ipcMain.handle('hub:sendReport', () => sendReportNow());
   ipcMain.handle('hub:open', (_e, what: string) => {
     if (what === 'micSettings') return shell.openExternal(IS_WIN ? 'ms-settings:privacy-microphone' : 'x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone');
     if (what === 'dataFolder') return shell.openPath(paths.userData);
@@ -507,7 +527,7 @@ async function main() {
   scheduleUpdates(() => settings.autoUpdate);
 
   // ── lifecycle ──
-  app.on('second-instance', () => openHub());
+  app.on('second-instance', () => { log('second instance started'); reporter.noteSecondInstance(); openHub(); });
   app.on('window-all-closed', () => { /* stay in tray */ });
   let quitting = false;
   app.on('before-quit', (e) => {
@@ -521,6 +541,7 @@ async function main() {
       mouse?.endTracking();
       highlight?.destroy();
       uia.dispose();
+      reporter.stop();
       try { await cv?.dispose(); } catch (err) { log('clipvault dispose', err); }
       try { await meeting?.dispose(); } catch (err) { log('notetaker dispose', err); }
       settingsFile.flush();

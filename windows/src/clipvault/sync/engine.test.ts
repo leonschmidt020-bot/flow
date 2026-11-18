@@ -63,6 +63,26 @@ async function pairedPair() {
 }
 
 describe('sync engine', () => {
+  it('keeps the init secret in the protected secrets file only, also before pairing', async () => {
+    const a = client('Lena');
+    expect(a.e.setup('https://fake.test', '  geheim-init-123  ')).toEqual({ url: 'https://fake.test', initSecret: true });
+    expect(fs.readFileSync(path.join(a.dir, 'sync.json'), 'utf8')).not.toContain('geheim-init-123');
+    const sec = fs.readFileSync(path.join(a.dir, 'sync-secrets.bin'));
+    expect(sec.subarray(0, 7).toString()).toBe('TESTBOX');
+    expect(sec.toString()).not.toContain('geheim-init-123');
+    expect(box.unprotect(sec).toString()).toContain('geheim-init-123');
+    const { code } = await a.e.pairCreate();
+    expect(code.startsWith('cvpair1.')).toBe(true);
+  });
+
+  it('shareText (error reports) reaches the partner as a plain text item', async () => {
+    const { a, b } = await pairedPair();
+    const s = b.vault.shareText('# Flow-Fehlerbericht\n\nalles ok');
+    await b.e.enqueue(s.id);
+    await until(() => a.vault.item(s.id)?.text?.startsWith('# Flow-Fehlerbericht') === true);
+    expect(a.vault.item(s.id)).toMatchObject({ kind: 'text', createdBy: 'Nico' });
+  });
+
   it('pairs, shares text live, and keeps secrets out of sync.json', async () => {
     const { a, b } = await pairedPair();
     expect(a.e.snapshot().partnerJoined).toBe(true);

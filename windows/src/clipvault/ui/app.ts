@@ -46,6 +46,7 @@ export class ClipVaultView {
   private viewerResize: ResizeObserver | null = null;
   private pairInput = '';
   private urlInput = '';
+  private secretInput = '';
 
   constructor(root: ShadowRoot | HTMLElement, private api: UiApi, private mode: Mode, material = 'solid') {
     const style = document.createElement('style');
@@ -368,12 +369,15 @@ export class ClipVaultView {
           ${opt(this.t('syncEnable'), '', sw('sync.enabled', true))}
           <div class="opt"><div class="ot"><div class="status"><span class="dot ${dotCls}"></span>${esc(this.t(stKey))}${sy.reason ? ' – ' + esc(sy.reason) : ''}${sy.queue ? ' · ' + esc(this.t('queue', sy.queue)) : ''}</div></div></div>
           <div class="opt"><div class="ot"><div>${esc(this.t('syncName'))}</div></div><input class="field" data-field="sync.name" value="${esc(s.sync.name)}" placeholder="${esc(this.api.locale === 'de' ? 'z. B. Lena' : 'e.g. Lena')}"></div>
-          ${sy.paired ? '' : `<div class="opt"><div class="ot"><div>${esc(this.t('syncUrl'))}</div></div><input class="field" style="width:320px" data-field="syncUrl" value="${esc(this.urlInput || sy.url || '')}" placeholder="${esc(this.t('syncUrlPh'))}"><button class="btn" data-act="syncSetup">${esc(this.t('syncSave'))}</button></div>`}
           ${sy.pairingCode ? `<div class="opt"><div class="ot"><div class="paircode">${esc(sy.pairingCode)}</div><div>${esc(this.t('syncCodeHint'))}</div></div><div style="display:flex;flex-direction:column;gap:6px"><button class="btn" data-act="copyCode">${icon('copy', 15)}${esc(this.t('copy'))}</button><button class="btn" data-act="syncPairCancel">${esc(this.t('syncCancel'))}</button></div></div>` : ''}
           ${sy.paired
             ? `<div class="opt"><div class="ot"><div>${esc(this.t('syncPaired'))}</div><div>${esc(sy.host ?? '')}</div></div><button class="btn" data-act="syncPairCreate">${esc(this.t('syncPairCreate'))}</button><button class="btn danger" data-act="syncUnpair">${esc(this.t('syncUnpair'))}</button></div>`
-            : `<div class="opt"><div class="ot"><div>${esc(this.t('syncPairJoin'))}</div></div><input class="field" style="width:260px" data-field="pairCode" value="${esc(this.pairInput)}" placeholder="${esc(this.t('syncCodePh'))}"><button class="btn" data-act="syncPairJoin">${esc(this.t('syncPairJoin'))}</button></div>
-               ${sy.state === 'unpaired' ? `<div class="opt"><div class="ot"><div>${esc(this.t('syncNewVault'))}</div></div><button class="btn" data-act="syncPairCreate">${esc(this.t('syncPairCreate'))}</button></div>` : ''}`}
+            // not paired: joining with a code comes FIRST (the code already contains the address) – creating an own
+            // vault (worker URL + init secret) is the rarer case and comes below
+            : `<div class="opt"><div class="ot"><div>${esc(this.t('syncPairJoin'))}</div><div>${esc(this.t('syncJoinHint'))}</div></div><input class="field" style="width:260px" data-field="pairCode" value="${esc(this.pairInput)}" placeholder="${esc(this.t('syncCodePh'))}"><button class="btn" data-act="syncPairJoin">${esc(this.t('syncPairJoin'))}</button></div>
+               <div class="opt"><div class="ot"><div>${esc(this.t('syncNewVault'))}</div><div>${esc(this.t('syncInitHint'))}</div></div></div>
+               <div class="opt"><input class="field" style="width:300px" data-field="syncUrl" value="${esc(this.urlInput || sy.url || '')}" placeholder="${esc(this.t('syncUrlPh'))}"><input class="field" style="width:150px" type="password" data-field="initSecret" value="${esc(this.secretInput)}" placeholder="${esc(this.t('syncInitPh'))}"><button class="btn" data-act="syncSetup">${esc(this.t('syncSave'))}</button></div>
+               ${sy.state === 'unpaired' ? `<div class="opt"><div class="ot"><div></div></div><button class="btn" data-act="syncPairCreate">${esc(this.t('syncPairCreate'))}</button></div>` : ''}`}
         </div>`;
     el.innerHTML = `
       <h3>${esc(this.t('settings'))}</h3>
@@ -426,7 +430,7 @@ export class ClipVaultView {
       case 'newCollection': await this.promptCollection(); break;
       case 'settingsPage': this.page = 'settings'; this.render(); break;
       case 'clearHistory': if (confirm(this.t('sClearConfirm'))) await this.api.invoke('clearHistory'); break;
-      case 'syncSetup': await this.syncCall('syncSetup', this.urlInput); break;
+      case 'syncSetup': await this.syncCall('syncSetup', this.urlInput, this.secretInput); this.secretInput = ''; break;
       case 'syncPairCreate': await this.syncCall('syncPairCreate'); break;
       case 'syncPairJoin': await this.syncCall('syncPairJoin', this.pairInput); this.pairInput = ''; break;
       case 'syncPairCancel': await this.syncCall('syncPairCancel'); break;
@@ -740,12 +744,13 @@ export class ClipVaultView {
       this.inputTimer = setTimeout(() => { this.sel = null; void this.refresh(); }, 60);
     } else if (t.dataset.field === 'pairCode') this.pairInput = t.value;
     else if (t.dataset.field === 'syncUrl') this.urlInput = t.value;
+    else if (t.dataset.field === 'initSecret') this.secretInput = t.value;
   }
 
   private onChange(e: Event) {
     const t = e.target as HTMLInputElement;
     const f = t.dataset.field;
-    if (!f || f === 'pairCode' || f === 'syncUrl') return;
+    if (!f || f === 'pairCode' || f === 'syncUrl' || f === 'initSecret') return;
     if (f === 'sync.name') void this.setSetting({ sync: { name: t.value } });
     else if (f === 'ignoredApps') void this.setSetting({ ignoredApps: t.value.split(/\r?\n/).map((x) => x.trim()).filter(Boolean) });
     else if (f === 'hotkey') void this.setSetting({ hotkey: t.value.trim() });

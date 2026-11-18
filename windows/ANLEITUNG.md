@@ -48,6 +48,25 @@ Zweimal kurz auf die Taste tippen startet freihändiges Diktieren, noch einmal d
   anklicken und an eine andere Stelle ziehen.
 - **Strg + Umschalt + V** öffnet ClipVault, den Verlauf deiner Zwischenablage.
 
+## Mit Freunden teilen und Fehlerberichte
+
+Mit ClipVault könnt ihr einen **geteilten Tresor** haben: Was einer teilt, haben alle anderen sofort – verschlüsselt,
+egal ob Windows oder Mac.
+
+1. Jemand, der schon im Tresor ist, erzeugt in seinem ClipVault einen **Kopplungscode** (beginnt mit `cvpair1.`) und
+   schickt ihn dir privat. Der Code gilt 15 Minuten.
+2. Bei dir: **Strg + Umschalt + V** → Zahnrad (Einstellungen) → **Teilen & Sync** → **Sync einschalten**.
+3. Bei **Mein Name** deinen Vornamen eintragen.
+4. Den Code bei **Mit Code koppeln** einfügen und auf den Knopf daneben klicken. Nach ein paar Sekunden steht da
+   **verbunden (live)**. Eine Adresse musst du nicht eintragen – sie steckt im Code.
+
+**Fehlerberichte:** Wenn du willst, dass dir jemand aus dem Tresor helfen kann, wenn Flow hakt: Flow-Fenster →
+Einstellungen → **Fehlerberichte** → **Fehlerberichte automatisch an den geteilten Tresor senden** einschalten.
+Geschickt werden nur Version, Windows-Version, Prozessor, Taste, Mikrofonname, eine Prüfliste und Zeilen aus dem
+Flow-Protokoll (dein Benutzername wird dabei durch `<user>` ersetzt) – **nie** was du diktierst, **nie** deine
+Zwischenablage. Mit **Jetzt senden** (auch im Menü am Flow-Symbol unten rechts: **Fehlerbericht jetzt senden**)
+schickst du sofort einen.
+
 ## Wenn etwas nicht geht
 
 | Problem | Lösung |

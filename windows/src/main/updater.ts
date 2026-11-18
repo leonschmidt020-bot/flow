@@ -5,6 +5,9 @@ import { log } from './log';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let updater: any = null;
+let latest: string | null = null;
+/** newest version GitHub reported (null = unknown / not packaged) */
+export const latestVersion = () => latest;
 
 export function initUpdater(onDownloaded: () => void) {
   if (!app.isPackaged) return;
@@ -15,6 +18,7 @@ export function initUpdater(onDownloaded: () => void) {
     updater.autoDownload = true;
     updater.autoInstallOnAppQuit = true;
     updater.logger = { info: (m: unknown) => log('update', m), warn: (m: unknown) => log('update warn', m), error: (m: unknown) => log('update error', m), debug: () => {} };
+    updater.on('update-available', (info: { version?: string }) => { if (info?.version) latest = info.version; });
     updater.on('update-downloaded', () => onDownloaded());
     updater.on('error', (e: Error) => log('update error', e.message));
   } catch (e) {

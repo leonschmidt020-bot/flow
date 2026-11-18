@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 // Shared vault – the local side of "Geteilt" (Mac: shared.swift). Only used when sync is switched on.
 //   shared.json                 {version, pending, items} (same shape as on the Mac, PROTOCOL.md §4)
 //   shared/<id>.png             image of a shared entry
@@ -150,6 +151,15 @@ export class SharedVault {
     for (const s of out) this.upsert(s);
     this.persist();
     return out;
+  }
+
+  /** Share a plain text that is not in the history (e.g. a Flow error report). Returns the new shared item. */
+  shareText(text: string, id: string = randomUUID()): SharedItem {
+    const now = this.nowSec();
+    const s: SharedItem = { id, kind: 'text', text, createdBy: this.opts.me(), createdAt: now, updatedAt: now, pinned: false, deleted: false };
+    this.upsert(s);
+    this.persist();
+    return s;
   }
 
   /** soft delete (tombstone) – by shared id or by history id (then all its files) */

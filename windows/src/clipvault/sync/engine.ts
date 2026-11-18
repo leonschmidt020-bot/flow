@@ -93,6 +93,8 @@ export class SyncEngine {
   private cfg: SyncConfig = {};
   private key: Buffer | null = null;
   private token: string | null = null;
+  /** INIT_SECRET of the user's own worker – only needed by the device that CREATES a vault (stored with the secrets) */
+  private initSecret: string | null = null;
   private queue: string[] = [];
   private state: SyncState = 'unconfigured';
   private reason = '';
@@ -134,18 +136,23 @@ export class SyncEngine {
   private saveConfig() { writeFileAtomic(this.p(FILES.config), JSON.stringify(this.cfg, null, 1)); }
   private saveQueue() { writeFileAtomic(this.p(FILES.queue), JSON.stringify(this.queue)); }
   private saveSecrets() {
-    if (!this.key || !this.token) { try { fs.rmSync(this.p(FILES.secrets), { force: true }); } catch { /* ignore */ } return; }
-    const plain = Buffer.from(JSON.stringify({ key: this.key.toString('hex'), token: this.token }), 'utf8');
+    if ((!this.key || !this.token) && !this.initSecret) { try { fs.rmSync(this.p(FILES.secrets), { force: true }); } catch { /* ignore */ } return; }
+    const plain = Buffer.from(JSON.stringify({
+      ...(this.key && this.token ? { key: this.key.toString('hex'), token: this.token } : {}),
+      ...(this.initSecret ? { initSecret: this.initSecret } : {}),
+    }), 'utf8');
     writeFileAtomic(this.p(FILES.secrets), this.d.secrets.protect(plain));
   }
   private loadSecrets() {
     const raw = readFileOrNull(this.p(FILES.secrets));
-    this.key = null; this.token = null;
+    this.key = null; this.token = null; this.initSecret = null;
     if (!raw) return;
     try {
       const o = JSON.parse(this.d.secrets.unprotect(raw).toString('utf8'));
       if (typeof o.key === 'string' && o.key.length === 64) this.key = Buffer.from(o.key, 'hex');
       if (typeof o.token === 'string' && /^[0-9a-f]{64}$/.test(o.token)) this.token = o.token;
+      if (typeof o.initSecret === 'string' && o.initSecret) this.initSecret = o.initSecret;
+      if (!this.key || !this.token) { this.key = null; this.token = null; }
     } catch {
       this.log('secrets unreadable (other user/machine?) – pair again');
     }
@@ -247,7 +254,7 @@ export class SyncEngine {
   }
 
   // ------------------------------------------------------------------ setup + pairing
-  setup(url: string): { url: string } {
+  setup(url: string, initSecret?: string | null): { url: string; initSecret: boolean } {
     const u = url.trim().replace(/\/+$/, '');
     let p: URL;
     try { p = new URL(u); } catch { throw new SyncError('URL muss https:// sein (http nur für localhost)'); }
@@ -255,9 +262,11 @@ export class SyncEngine {
     if (p.protocol !== 'https:' && !localHttp) throw new SyncError('URL muss https:// sein (http nur für localhost)');
     if (this.paired && this.cfg.url !== u) throw new SyncError('Schon gekoppelt – erst trennen');
     this.cfg.url = u; this.saveConfig();
+    const sec = (initSecret ?? '').trim();
+    if (sec) { this.initSecret = sec; this.saveSecrets(); }
     if (!this.paired) this.state = 'unpaired';
     this.emit();
-    return { url: u };
+    return { url: u, initSecret: !!this.initSecret };
   }
 
   async pairCreate(): Promise<{ code: string; expiresAt: number }> {
@@ -266,7 +275,13 @@ export class SyncEngine {
       const vault = randomUUID().toLowerCase();
       const tok = randomBytes(32).toString('hex');
       const k = randomBytes(32);
-      await this.request('POST', `${b}/v/${vault}/init`, undefined, tok);
+      try {
+        await this.request('POST', `${b}/v/${vault}/init`, undefined, tok, { 'X-CV-Init-Secret': this.initSecret ?? '' });
+      } catch (e) {
+        if (e instanceof SyncError && e.status === 503) throw new SyncError('Dein Worker hat noch kein INIT_SECRET – `npx wrangler secret put INIT_SECRET` (siehe sync-worker/README.md)', 503);
+        if (e instanceof SyncError && e.status === 403) throw new SyncError('Init-Geheimnis fehlt oder ist falsch – in den Sync-Einstellungen eintragen (nur zum Anlegen eines Tresors nötig; zum Beitreten reicht der Code)', 403);
+        throw e;
+      }
       this.key = k; this.token = tok; this.saveSecrets();
       Object.assign(this.cfg, { vaultId: vault, cursor: 0, partnerJoined: false }); this.saveConfig();
       this.log(`new vault ${vault.slice(0, 8)}`);

@@ -298,7 +298,7 @@ export async function initClipVault(ctx: ClipVaultContext): Promise<ClipVaultHan
     openHub: () => { panel.hide(false); emit('open-hub'); return true; },
     // ---- sync ----
     syncStatus: () => (engine ? engine.status() : { state: 'off' }),
-    syncSetup: (_e, url: string) => { if (!engine) startSync(); return engine!.setup(String(url ?? '')); },
+    syncSetup: (_e, url: string, initSecret?: string) => { if (!engine) startSync(); return engine!.setup(String(url ?? ''), typeof initSecret === 'string' ? initSecret : null); },
     syncPairCreate: async () => { if (!engine) startSync(); return engine!.pairCreate(); },
     syncPairJoin: async (_e, code: string) => { if (!engine) startSync(); return engine!.pairJoin(String(code ?? '')); },
     syncPairCancel: async () => engine?.pairCancel(),
@@ -349,6 +349,14 @@ export async function initClipVault(ctx: ClipVaultContext): Promise<ClipVaultHan
 
   return {
     openPanel: () => panel.show(),
+    shareText: async (text: string) => {
+      if (!engine) return 'off';
+      const snap = engine.snapshot();
+      if (!snap.paired) return 'unpaired';
+      const it = vault.shareText(text);
+      await engine.enqueue(it.id);
+      return engine.snapshot().queue === 0 ? 'sent' : 'queued';
+    },
     dispose: async () => {
       unbind?.();
       watcher.stop();

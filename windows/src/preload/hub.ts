@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('flow', {
   micMonitor: (on: boolean) => ipcRenderer.invoke('hub:mic:monitor', on),
   open: (what: 'micSettings' | 'dataFolder' | 'homepage') => ipcRenderer.invoke('hub:open', what),
   checkUpdates: () => ipcRenderer.invoke('hub:checkUpdates'),
+  sendReport: () => ipcRenderer.invoke('hub:sendReport'),
   onState: (cb: (s: unknown) => void) => on('hub:state', cb),
   onLevel: (cb: (lv: unknown) => void) => on('hub:level', cb),
   onNavigate: (cb: (page: unknown) => void) => on('hub:navigate', cb),

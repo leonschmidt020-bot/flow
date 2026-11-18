@@ -130,6 +130,24 @@ context · task · acceptance criteria · rules · open questions). Common mishe
   CLI (your account; no tools, no MCP servers, no stored session). Sent: the dictation, the app name and – for developer/agent
   apps only – the window title; never the clipboard. The log holds model, effort, word counts and times only, never text.
 
+## Share with friends + error reports
+
+ClipVault (Ctrl+Shift+V → settings → **Teilen & Sync**) can share a vault with several people – Windows and Mac mixed,
+end-to-end encrypted through a Cloudflare worker that one of you runs (`mac/clipvault/sync-worker`).
+
+- **Join an existing vault:** someone who is already in it clicks **Kopplungscode erzeugen** and sends you the code
+  (`cvpair1.…`, privately, valid 15 min). You turn sync on, paste it into **Mit Code koppeln** – done; the address is in
+  the code. Any member can invite, any number of devices.
+- **Create a new vault:** worker URL + its `INIT_SECRET` (only needed for creating), then **Kopplungscode erzeugen**.
+- **Error reports (off by default):** Settings → **Fehlerberichte** → *send error reports to the shared vault
+  automatically*. Then Flow puts a short Markdown report into the shared vault when new errors show up in the log (at
+  most every 30 min, bundled), once a day if there were errors or warnings, and whenever you click **Send now** (also in
+  the tray menu). Contents: version, Windows build, CPU, hotkey, microphone name, model status, an automatic checklist
+  (ok/problem) and the last 40 relevant log lines with your user name replaced by `<user>`. Never dictated text, never
+  the clipboard, no files.
+- **Format** (so other apps can recognise it): a shared item of kind `text`, `createdBy` = your sync name, and the text
+  starts with the line `# Flow-Fehlerbericht`.
+
 ## Data
 
 Everything is stored in `%APPDATA%\Flow` (`app.getPath('userData')`):
@@ -161,6 +179,7 @@ npm run build         # esbuild → dist/
 npm run render        # offscreen PNGs of pill + hub states → .cache/render (no window is shown)
 npm run smoke         # end-to-end: WAV → ASR → polish → (no-op paste) → history → hub screenshot, then quits
 npm run dev           # starts the app with --dev --no-hotkey
+npm run test:sync     # ClipVault sync against a local worker (wrangler dev; needs npm ci in ../mac/clipvault/sync-worker)
 npm run dist:win      # NSIS installer → release/ (on Windows / CI)
 npm run dist:win:local  # cross-build on macOS (fetches the win-x64 native prebuilds first; no wine needed)
 ```

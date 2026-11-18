@@ -1,7 +1,7 @@
 {
   "name": "flow",
   "productName": "Flow",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Flow – free, open-source, 100 % local voice dictation",
   "license": "MIT",
   "author": "Flow contributors",
@@ -13,6 +13,7 @@
     "lint": "eslint src scripts test && tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "test:asr": "node scripts/build.mjs --scripts-only && node dist-scripts/test-asr.js",
+    "test:sync": "node scripts/build.mjs --scripts-only && node dist-scripts/test-sync.js",
     "test:meeting": "node scripts/build.mjs --scripts-only && node dist-scripts/test-meeting.js",
     "fixtures:meeting": "node scripts/make-meeting-fixture.mjs",
     "fixtures:tts": "node scripts/make-tts-fixtures.mjs",

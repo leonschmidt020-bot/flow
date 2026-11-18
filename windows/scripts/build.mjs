@@ -22,6 +22,7 @@ async function scripts() {
   mkdirSync(r('dist-scripts'), { recursive: true });
   await build({ ...node, entryPoints: [r('scripts/test-asr.ts')], outfile: r('dist-scripts/test-asr.js') });
   await build({ ...node, entryPoints: [r('scripts/test-meeting.ts')], outfile: r('dist-scripts/test-meeting.js') });
+  await build({ ...node, entryPoints: [r('scripts/test-sync.ts')], outfile: r('dist-scripts/test-sync.js') });
 }
 
 function copyStatic(fromDir, toDir, exts) {

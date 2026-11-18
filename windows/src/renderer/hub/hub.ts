@@ -21,6 +21,7 @@ interface FlowApi {
   micMonitor(on: boolean): Promise<void>;
   open(what: 'micSettings' | 'dataFolder' | 'homepage'): Promise<void>;
   checkUpdates(): Promise<void>;
+  sendReport?(): Promise<string>;
   onState(cb: (s: HubState) => void): () => void;
   onLevel(cb: (lv: number) => void): () => void;
   onNavigate(cb: (p: string) => void): () => void;
@@ -292,6 +293,9 @@ function settingsPage(): PageView {
       row(t('clipVaultOn'), t('clipVaultOnDesc'), sw('clipVault')),
       row(t('historyKeep'), t('historyKeepDesc', { days: S.settings.historyRetentionDays }), sw('historyEnabled')),
       row(t('autoUpdate'), t('autoUpdateDesc'), sw('autoUpdate')))),
+    h('div', { class: 'section' }, h('h2', null, t('secReports')), h('div', { class: 'card' },
+      row(t('errorReports'), t('errorReportsDesc'), sw('errorReports')),
+      row(t('reportSendNow'), t('reportSendNowDesc'), h('button', { class: 'btn', on: { click: () => void api.sendReport?.() } }, t('reportSendNowBtn'))))),
     h('div', { class: 'section' }, h('h2', null, t('secAbout')), h('div', { class: 'card' },
       row(t('version', { v: S.version }), t('aboutText'),
         h('button', { class: 'btn ghost', on: { click: () => api.open('dataFolder') } }, t('openData')),

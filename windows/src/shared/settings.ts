@@ -46,6 +46,8 @@ export interface Settings {
   pillPlacements: Record<string, PillPlacement>;
   /** the „no right Ctrl key?“ hint was answered (laptops with a Copilot key) – not shown again */
   hotkeyHintDone: boolean;
+  /** opt-in: short error reports (version, system, checklist, log lines – never dictated text) into the shared ClipVault vault */
+  errorReports: boolean;
 }
 
 export const DEFAULTS: Settings = {
@@ -75,6 +77,7 @@ export const DEFAULTS: Settings = {
   onboardingDone: false,
   pillPlacements: {},
   hotkeyHintDone: false,
+  errorReports: false,
 };
 
 const bool = (v: unknown, d: boolean) => (typeof v === 'boolean' ? v : d);
@@ -153,6 +156,7 @@ export function migrateSettings(raw: unknown): Settings {
     onboardingDone: bool(r.onboardingDone, false),
     pillPlacements: sanitizePlacements(r.pillPlacements),
     hotkeyHintDone: bool(r.hotkeyHintDone, false),
+    errorReports: bool(r.errorReports, false),
   };
 }
 

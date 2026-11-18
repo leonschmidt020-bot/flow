@@ -6,6 +6,8 @@ export interface TrayActions {
   openHub(): void; openClipVault(): void; clipVaultOn(): boolean; togglePause(): void; checkUpdates(): void; quit(): void;
   /** pill: always visible on/off, back to the bottom centre */
   pillVisible?(): boolean; togglePill?(): void; resetPill?(): void;
+  /** „Fehlerbericht jetzt senden“ */
+  sendReport?(): void;
 }
 
 export class FlowTray {
@@ -39,6 +41,7 @@ export class FlowTray {
         { label: t(locale, 'pillPosReset'), click: () => this.a.resetPill?.() },
       ] : []),
       { label: t(locale, 'checkUpdates'), click: () => this.a.checkUpdates() },
+      ...(this.a.sendReport ? [{ label: t(locale, 'reportSendNow'), click: () => this.a.sendReport?.() }] : []),
       { type: 'separator' },
       { label: t(locale, 'trayQuit'), click: () => this.a.quit() },
     ]));

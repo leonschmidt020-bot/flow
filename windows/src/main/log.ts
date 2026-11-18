@@ -3,6 +3,11 @@ import { appendFileSync, mkdirSync, renameSync, statSync, existsSync } from 'nod
 import path from 'node:path';
 
 let file = '';
+const listeners = new Set<(line: string) => void>();
+/** every new log line (error reports watch for errors) */
+export function onLogLine(cb: (line: string) => void) { listeners.add(cb); return () => listeners.delete(cb); }
+/** path of the log file ('' before initLog) */
+export const logFile = () => file;
 export function initLog(dir: string) {
   mkdirSync(dir, { recursive: true });
   file = path.join(dir, 'flow.log');
@@ -10,6 +15,7 @@ export function initLog(dir: string) {
 export function log(...args: unknown[]) {
   const line = `${new Date().toISOString()} ${args.map((a) => (a instanceof Error ? `${a.message}\n${a.stack}` : typeof a === 'string' ? a : JSON.stringify(a))).join(' ')}\n`;
   if (process.env.FLOW_DEBUG) process.stdout.write(line);
+  for (const l of listeners) { try { l(line); } catch { /* ignore */ } }
   if (!file) return;
   try {
     if (existsSync(file) && statSync(file).size > 1_000_000) renameSync(file, file + '.1');

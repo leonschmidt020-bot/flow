@@ -103,4 +103,15 @@ gemeinsame Namen (vocab) werden empfangen, geprüft (id passt zum Wort) und in `
 
 Noch nicht: Ordner teilen (Mac zippt sie), „Neu vom Partner“ (`shared-seen.json`, grüner Punkt), Speicher-
 aufräumen (`evict`/`cleanupBig`), `vocab` senden (Flow-Diktat hat noch keinen Namens-Lerner), Anzeige laufender
-Übertragungen als Ring. Nie gegen den echten Worker getestet (bewusst: kein Netz in diesem Lauf).
+Übertragungen als Ring.
+
+Getestet gegen einen echten (lokalen) Worker: `npm run test:sync` startet `wrangler dev --local` aus
+`mac/clipvault/sync-worker` (eigener Speicherordner, eigenes `INIT_SECRET`, nie ein echter Tresor) und prüft mit vier
+Geräten: ohne Init-Geheimnis kein Tresor · A legt an · B koppelt NUR mit dem Code · C koppelt mit einem Code von B ·
+D mit einem zweiten Code von A · Text hin und zurück · 6-MB-Datei in Teilen, byte-gleich · Wiederverbinden mit
+Nachholen · Fehlerbericht kommt an · im Worker-Speicher steht kein Klartext. `-- --mac-cv <clipvault-binary>` macht
+Gerät A zum Mac-ClipVault (Swift, `sync-agent` mit eigenem `CLIPVAULT_HOME` + Schlüsselbund-Suffix). Läuft in CI
+(Windows + macOS).
+
+Init-Geheimnis: der Worker verlangt zum ANLEGEN eines Tresors `X-CV-Init-Secret` (sonst kann jeder mit der URL einen
+Tresor anlegen). Es steht in `sync-secrets.bin` (DPAPI), nie in `sync.json`. Zum Beitreten braucht es nur den Code.

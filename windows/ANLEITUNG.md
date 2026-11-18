@@ -55,7 +55,7 @@ egal ob Windows oder Mac.
 
 1. Jemand, der schon im Tresor ist, erzeugt in seinem ClipVault einen **Kopplungscode** (beginnt mit `cvpair1.`) und
    schickt ihn dir privat. Der Code gilt 15 Minuten.
-2. Bei dir: **Strg + Umschalt + V** → Zahnrad (Einstellungen) → **Teilen & Sync** → **Sync einschalten**.
+2. Bei dir das **Flow-Fenster** öffnen (Flow-Symbol unten rechts → **Flow öffnen**, oder im ClipVault-Fenster oben rechts **⧉**) → links **ClipVault** → im ClipVault-Bereich links unten **Einstellungen** → **Teilen & Sync** → **Sync einschalten**. (Im kleinen ClipVault-Fenster selbst gibt es kein Zahnrad.)
 3. Bei **Mein Name** deinen Vornamen eintragen.
 4. Den Code bei **Mit Code koppeln** einfügen und auf den Knopf daneben klicken. Nach ein paar Sekunden steht da
    **verbunden (live)**. Eine Adresse musst du nicht eintragen – sie steckt im Code.

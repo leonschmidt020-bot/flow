@@ -355,7 +355,7 @@ function clipVaultPage(): PageView {
   const root = host.attachShadow({ mode: 'open' });
   let unmount: (() => void) | null = null;
   try {
-    unmount = mountClipVault(root, { invoke: (n, ...a) => api.clipvault.invoke(n, ...a) as Promise<never>, on: (n, cb) => api.clipvault.on(n, cb), locale: L() });
+    unmount = mountClipVault(root, { invoke: (n, ...a) => api.clipvault.invoke(n, ...a) as Promise<never>, on: (n, cb) => api.clipvault.on(n, cb), locale: L(), onSwitch: () => go(lastFlowPage) });
   } catch (e) {
     root.append(h('div', { style: 'padding:40px;color:var(--text-dim)' }, 'ClipVault: ' + String(e)));
   }
@@ -377,8 +377,20 @@ function meetingPage(): PageView {
   return v;
 }
 
+let lastFlowPage: Page = 'history';
+/** Flow ⇄ ClipVault switch next to the logo (Mac: same toggle); hidden when ClipVault is off */
+function renderModes() {
+  const m = document.getElementById('modes');
+  if (!m) return;
+  m.hidden = S.settings.clipVault === false;
+  m.replaceChildren(
+    h('button', { class: 'on', title: 'Flow', tabindex: '-1' }, svg('<path d="M4 7v10M8 10v4M12 6v12M16 9v6M20 7v10"/>')),
+    h('button', { title: 'ClipVault', on: { click: () => go('clipvault') } }, svg(I.clipvault)));
+}
 function go(p: Page) {
   if (p === 'clipvault' && S.settings.clipVault === false) p = 'settings';
+  if (p !== 'clipvault') lastFlowPage = p;
+  document.querySelector('.app')?.classList.toggle('cvmode', p === 'clipvault');
   view?.dispose?.();
   page = p;
   view = p === 'history' ? historyPage() : p === 'notetaker' ? meetingPage() : p === 'prompts' ? promptPage() : p === 'dictionary' ? dictionaryPage() : p === 'clipvault' ? clipVaultPage() : settingsPage();
@@ -388,6 +400,7 @@ function go(p: Page) {
   box.scrollTop = 0;
   document.documentElement.lang = L();
   renderNav();
+  renderModes();
   renderStatus();
 }
 function refresh() { renderStatus(); renderNav(); view?.update(); }

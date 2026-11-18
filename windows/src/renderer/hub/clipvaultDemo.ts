@@ -23,10 +23,38 @@ export function demoClipVault(loc: 'de' | 'en'): (name: string, ...a: unknown[])
     collections: [{ id: 'c1', name: de ? 'Arbeit' : 'Work', symbol: 'briefcase', count: 3, secret: false }, { id: 'c2', name: de ? 'Passwörter' : 'Passwords', symbol: 'lock', count: 2, secret: true }],
     historyCount: 7, total: 7,
   };
+  const q = new URLSearchParams(location.search);
+  const sync = q.get('sync') ?? 'connected';
+  const sh = (id: string, by: string, text: string, ago: number, o: Partial<ItemView> = {}): ItemView =>
+    mk(id, text, by, ago, { collection: '__shared__', shared: true, source: by, ...o });
+  const sharedItems: ItemView[] = [
+    sh('s1', 'Lena', de ? 'Kannst du mir bis Freitag die Busangebote schicken? Dann entscheiden wir am Wochenende.' : 'Can you send me the bus quotes by Friday? Then we decide on the weekend.', 300),
+    sh('s2', 'Nico', '# Flow-Fehlerbericht · Flow 0.6.0 · 0 Probleme', 1900),
+    sh('s3', 'Sam', 'https://github.com/leonschmidt020-bot/flow', 4000, { isLink: true, badges: ['link'] }),
+    sh('s4', 'Lena', de ? 'Treffpunkt Samstag 9:30 am Gemeindehaus' : 'Meeting point Saturday 9:30 at the hall', 7200),
+    sh('s5', 'Nico', de ? 'Präsentation_final.pdf' : 'Presentation_final.pdf', 86400 + 600, { kind: 'file', fileNames: ['Präsentation_final.pdf'], subtitle: 'Nico · 2.4 MB' }),
+  ];
+  const settings = {
+    encryptAtRest: false, skipPasswordLike: true, ignoredApps: ['KeePass.exe'], maxAgeDays: 2, maxItems: 200, quotaMB: 1024,
+    hotkey: 'Control+Shift+V', pasteOnEnter: true, paused: false, sync: { enabled: sync !== 'off', name: 'Sam' },
+    dpapiAvailable: true, platform: 'win32', readOnly: false, recovery: '',
+  };
+  const syncView = sync === 'connected' ? { state: 'connected', paired: true, queue: 0, host: 'clipvault-sync.workers.dev' }
+    : sync === 'code' ? { state: 'connected', paired: true, queue: 0, host: 'clipvault-sync.workers.dev', pairingCode: 'cvpair1.' + 'DEMO-nur-zum-Ansehen-'.repeat(5) + 'kein-echter-Code' }
+    : sync === 'off' ? { state: 'off' } : { state: 'unconfigured', paired: false };
   return async (name, ...a) => {
-    if (name === 'list') return list;
-    if (name === 'item') return items.find((x) => x.id === a[0]) ?? null;
-    if (name === 'syncStatus') return { state: 'connected', paired: true, queue: 0 };
+    if (name === 'list') {
+      const arg = (a[0] ?? {}) as { collection?: string | null; type?: string };
+      if (arg.collection === '__shared__') return { ...list, sections: [{ key: 'shared', items: sync === 'connected' || sync === 'code' ? sharedItems : [] }] };
+      if (arg.type && arg.type !== 'all') {
+        const f = (i: ItemView) => arg.type === 'links' ? i.isLink : arg.type === 'files' ? i.kind === 'file' : arg.type === 'images' ? i.kind === 'image' : i.kind === 'text' && !i.isLink;
+        return { ...list, sections: list.sections.map((x) => ({ ...x, items: x.items.filter(f) })).filter((x) => x.items.length) };
+      }
+      return list;
+    }
+    if (name === 'item') return [...items, ...sharedItems].find((x) => x.id === a[0]) ?? null;
+    if (name === 'syncStatus') return syncView;
+    if (name === 'settings') return settings;
     return null;
   };
 }

@@ -46,6 +46,8 @@ export interface ClipVaultUiApi {
   invoke<T = unknown>(name: string, ...args: unknown[]): Promise<T>;
   on(name: string, cb: (payload: unknown) => void): () => void;
   locale: 'de' | 'en';
+  /** optional: Flow ⇄ ClipVault switch in the ClipVault sidebar (back to Flow's last page) */
+  onSwitch?: () => void;
 }
 
 export type MountClipVault = (root: ShadowRoot, api: ClipVaultUiApi) => () => void;

@@ -10,7 +10,16 @@ export interface UiApi {
   invoke<T = unknown>(name: string, ...args: unknown[]): Promise<T>;
   on(name: string, cb: (payload: unknown) => void): () => void;
   locale: 'de' | 'en';
+  /** Hub only: the Flow ⇄ ClipVault switch in the sidebar (Mac: same toggle next to the logo) */
+  onSwitch?: () => void;
 }
+
+type Nav = 'history' | 'pinned' | 'images' | 'links' | 'files';
+const ILLU = '../../assets/illustrations/';
+const lsGet = (k: string) => { try { return localStorage.getItem(k) === '1'; } catch { return false; } };
+const lsSet = (k: string, v: boolean) => { try { localStorage.setItem(k, v ? '1' : '0'); } catch { /* storage off */ } };
+const AV_COLORS = ['#8c5ccc', '#4e8c88', '#c0602a', '#2f63b8', '#b8467f', '#6b8e23', '#a06c12'];
+const avColor = (name: string) => { let h = 0; for (const c of name.toLowerCase()) h = (h * 31 + c.charCodeAt(0)) >>> 0; return AV_COLORS[h % AV_COLORS.length]; };
 
 type Mode = 'panel' | 'hub';
 type CollectionId = string | null; // null = history, '__shared__' = shared vault
@@ -47,6 +56,17 @@ export class ClipVaultView {
   private pairInput = '';
   private urlInput = '';
   private secretInput = '';
+  private nav: Nav = 'history';
+  /** shared view: null = everyone, '' = me, else a member name */
+  private person: string | null = null;
+  private members: string[] = [];
+  private pinCollapsed = lsGet('cv.pinCollapsed');
+  private hiddenPins = 0;
+  private pinnedCount = 0;
+  private todayCount = 0;
+  private counts: Record<TypeFilter, number> = { all: 0, text: 0, links: 0, images: 0, files: 0 };
+  private heroOff = lsGet('cv.heroOff');
+  private showAdvanced = false;
 
   constructor(root: ShadowRoot | HTMLElement, private api: UiApi, private mode: Mode, material = 'solid') {
     const style = document.createElement('style');
@@ -81,9 +101,31 @@ export class ClipVaultView {
   }
 
   private t(k: StringKey, ...a: (string | number)[]) { return tr(this.api.locale, k, ...a); }
+  private me() { return this.settings?.sync.name || ''; }
+  private keycaps(hk: string) {
+    const de = this.api.locale === 'de';
+    return hk.split('+').map((k) => k.trim()).filter(Boolean).map((k) => {
+      const l = k.toLowerCase();
+      const n = l === 'control' || l === 'ctrl' || l === 'commandorcontrol' ? (de ? 'Strg' : 'Ctrl') : l === 'shift' ? (de ? 'Umschalt' : 'Shift') : l === 'alt' ? 'Alt' : l === 'super' || l === 'meta' ? 'Win' : k.toUpperCase();
+      return `<kbd>${esc(n)}</kbd>`;
+    }).join('');
+  }
   private $(sel: string) { return this.el.querySelector(sel) as HTMLElement | null; }
 
   private async boot() {
+    if (this.mode === 'hub') {
+      // render check only (offscreen PNGs): start on a given view
+      const q = new URLSearchParams(location.search);
+      if (q.get('render') === '1') {
+        const v = q.get('cv');
+        if (v === 'shared') this.col = SHARED;
+        else if (v === 'settings') this.page = 'settings';
+        else if (v === 'pinfold') this.pinCollapsed = true;
+        if (q.get('cvperson')) this.person = q.get('cvperson');
+        if (q.get('cvadv')) this.showAdvanced = true;
+        this.heroOff = false;
+      }
+    }
     try { this.settings = await this.api.invoke<SettingsView>('settings'); } catch { /* older main */ }
     try { this.sync = await this.api.invoke<SyncView>('syncStatus'); } catch { this.sync = { state: 'off' }; }
     await this.refresh();
@@ -116,8 +158,31 @@ export class ClipVaultView {
       return;
     }
     if (seq !== this.reqSeq) return;
-    this.data = data;
-    this.flat = data.sections.flatMap((s) => s.items);
+    let sections = data.sections;
+    if (this.col === null && !this.q) {
+      this.counts = data.counts;
+      if (this.type === 'all') {
+        this.pinnedCount = sections.find((x) => x.key === 'pinned')?.items.length ?? 0;
+        this.todayCount = sections.find((x) => x.key === 'today')?.items.length ?? 0;
+      }
+    }
+    if (this.col === null && this.nav === 'pinned') sections = sections.filter((x) => x.key === 'pinned');
+    if (this.col === SHARED) {
+      const me = this.me().toLowerCase();
+      const all = sections.flatMap((x) => x.items);
+      this.members = [...new Set(all.map((i) => i.source ?? '').filter((n) => n && n.toLowerCase() !== me))].sort((a, b) => a.localeCompare(b));
+      if (this.person !== null && this.person !== '' && !this.members.includes(this.person)) this.person = null;
+      if (this.person !== null) {
+        const want = (this.person || me).toLowerCase();
+        sections = sections.map((x) => ({ ...x, items: x.items.filter((i) => (i.source ?? '').toLowerCase() === want) }));
+      }
+    }
+    this.hiddenPins = 0;
+    if (this.pinCollapsed && !this.q && this.col === null && this.nav !== 'pinned') {
+      sections = sections.map((x) => { if (x.key !== 'pinned') return x; this.hiddenPins = x.items.length; return { ...x, items: [] }; });
+    }
+    this.data = { ...data, sections };
+    this.flat = sections.flatMap((x) => x.items);
     if (!this.sel || !this.flat.some((i) => i.id === this.sel)) this.sel = this.flat[0]?.id ?? null;
     this.render();
     await this.loadDetail();
@@ -159,12 +224,18 @@ export class ClipVaultView {
     } else {
       this.el.innerHTML = `
         <aside class="side"></aside>
-        <section class="main">
-          <div class="top"><label class="search">${icon('search', 16)}<input class="q" type="text" spellcheck="false" autocomplete="off" placeholder="${esc(this.t('searchPlaceholder'))}"><kbd>Strg F</kbd></label></div>
-          <div class="filters"></div>
-          <div class="banners"></div>
-          <div class="body"><div class="list" tabindex="-1"></div><div class="prev"></div></div>
-          <div class="settings" hidden></div>
+        <section class="frame">
+          <section class="main">
+            <div class="mhead"></div>
+            <div class="hero"></div>
+            <div class="top"><label class="search">${icon('search', 16)}<input class="q" type="text" spellcheck="false" autocomplete="off" placeholder="${esc(this.t('searchPlaceholder'))}"><kbd>${this.api.locale === 'de' ? 'Strg' : 'Ctrl'} F</kbd></label></div>
+            <div class="filters"></div>
+            <div class="banners"></div>
+            <div class="connect-slot"></div>
+            <div class="body"><div class="list" tabindex="-1"></div></div>
+            <div class="settings" hidden></div>
+          </section>
+          <aside class="prev"></aside>
         </section>`;
     }
   }
@@ -172,10 +243,12 @@ export class ClipVaultView {
   private render() {
     if (this.mode === 'panel') this.renderChips(); else this.renderSide();
     const inSettings = this.page === 'settings';
-    for (const sel of ['.filters', '.body', '.top', '.banners']) { const n = this.$(sel); if (n && this.mode === 'hub') n.hidden = inSettings; }
+    for (const sel of ['.filters', '.body', '.top', '.banners', '.mhead', '.hero', '.connect-slot', '.prev']) { const n = this.$(sel); if (n && this.mode === 'hub') n.hidden = inSettings; }
+    this.$('.frame')?.classList.toggle('insettings', inSettings);
     const st = this.$('.settings');
     if (st) st.hidden = !inSettings;
     if (inSettings) { this.renderSettings(); return; }
+    if (this.mode === 'hub') { this.renderHead(); this.renderHero(); this.renderConnect(); }
     this.renderFilters();
     this.renderBanners();
     this.renderList();
@@ -203,17 +276,92 @@ export class ClipVaultView {
     const s = this.$('.side');
     if (!s) return;
     const d = this.data;
-    const syncOn = !!this.settings?.sync.enabled;
-    const on = (c: CollectionId) => (this.page === 'list' && this.col === c ? 'on' : '');
+    const st = this.settings;
+    const sy = this.sync;
+    const list = this.page === 'list';
+    const navOn = (n: Nav) => (list && this.col === null && this.nav === n ? 'on' : '');
+    const colOn = (c: CollectionId) => (list && this.col === c ? 'on' : '');
+    const n = (v: number) => (v ? `<span class="n">${v}</span>` : '');
+    const live = st?.sync.enabled && sy?.state === 'connected';
     s.innerHTML = `
-      <h2>${esc(this.t('hubTitle'))}</h2><div class="subt">${esc(this.t('hubSubtitle'))}</div>
-      <button class="nav ${on(null)}" data-col="" data-drop="">${icon('text', 16)}${esc(this.t('history'))}<span class="n">${d?.historyCount ?? ''}</span></button>
-      ${syncOn ? `<button class="nav ${on(SHARED)}" data-col="${SHARED}">${icon('cloud', 16)}${esc(this.t('shared'))}</button>` : ''}
+      <div class="brand">
+        <span class="bic">${icon('vault', 22)}</span><span class="bw">ClipVault</span>
+        ${this.api.onSwitch ? `<div class="modes"><button data-act="toFlow" title="${esc(this.t('toFlow'))}">${icon('bars', 15)}</button><button class="on" tabindex="-1">${icon('vault', 15)}</button></div>` : ''}
+      </div>
+      <button class="nav ${navOn('history')}" data-nav="history" data-drop="">${icon('clock', 18)}${esc(this.t('history'))}${n(d?.historyCount ?? 0)}</button>
+      <button class="nav ${navOn('pinned')}" data-nav="pinned">${icon('pin', 18)}${esc(this.t('navPinned'))}${n(this.pinnedCount)}</button>
+      <button class="nav ${navOn('images')}" data-nav="images">${icon('image', 18)}${esc(this.t('images'))}${n(this.counts.images)}</button>
+      <button class="nav ${navOn('links')}" data-nav="links">${icon('link', 18)}${esc(this.t('links'))}${n(this.counts.links)}</button>
+      <button class="nav ${navOn('files')}" data-nav="files">${icon('file', 18)}${esc(this.t('files'))}${n(this.counts.files)}</button>
+      <button class="nav ${colOn(SHARED)}" data-col="${SHARED}">${icon('users', 18)}${esc(this.t('shared'))}${live ? '<i class="live"></i>' : ''}</button>
       <div class="lbl">${esc(this.api.locale === 'de' ? 'Bereiche' : 'Collections')}</div>
-      ${(d?.collections ?? []).map((k) => `<button class="nav ${on(k.id)}" data-col="${esc(k.id)}" data-drop="${esc(k.id)}" data-colmenu="${esc(k.id)}">${this.colIcon(k.symbol, k.secret)}${esc(k.name)}<span class="n">${k.count || ''}</span></button>`).join('')}
-      <button class="nav" data-act="newCollection">${icon('plus', 16)}${esc(this.t('newCollection'))}</button>
+      ${(d?.collections ?? []).map((k) => `<button class="nav sm ${colOn(k.id)}" data-col="${esc(k.id)}" data-drop="${esc(k.id)}" data-colmenu="${esc(k.id)}">${this.colIcon(k.symbol, k.secret)}${esc(k.name)}${n(k.count)}</button>`).join('')}
+      <button class="nav sm dim" data-act="newCollection">${icon('plus', 16)}${esc(this.t('newCollection'))}</button>
       <div class="grow"></div>
-      <button class="nav ${this.page === 'settings' ? 'on' : ''}" data-act="settingsPage">${icon('settings', 16)}${esc(this.t('settings'))}</button>`;
+      <div class="scard">
+        <div class="st"><i class="dot ${st?.paused ? 'warn' : 'ok'}"></i>${esc(st?.paused ? this.t('pausedState') : this.t('running'))}</div>
+        <div class="big"><b>${this.todayCount}</b>${esc(this.t('copiesToday'))}</div>
+        <div class="keys">${this.keycaps(st?.hotkey ?? 'Control+Shift+V')}<span>${esc(this.t('opensAnywhere'))}</span></div>
+      </div>
+      <div class="sep"></div>
+      <button class="nav ${this.page === 'settings' ? 'on' : ''}" data-act="settingsPage">${icon('settings', 18)}${esc(this.t('settings'))}</button>`;
+  }
+
+  private headTitle(): string {
+    if (this.col === SHARED) return this.t('shared');
+    if (this.col) return this.data?.collections.find((c) => c.id === this.col)?.name ?? '';
+    return this.nav === 'pinned' ? this.t('navPinned') : this.nav === 'images' ? this.t('images') : this.nav === 'links' ? this.t('links') : this.nav === 'files' ? this.t('files') : this.t('history');
+  }
+
+  private renderHead() {
+    const h = this.$('.mhead');
+    if (!h) return;
+    const sy = this.sync ?? { state: 'off' };
+    const on = !!this.settings?.sync.enabled;
+    const st = on ? sy.state : 'off';
+    const dot = st === 'connected' ? 'ok' : st === 'offline' ? 'bad' : st === 'off' ? '' : 'warn';
+    const pill = this.col === SHARED ? `<span class="spill"><i class="dot ${dot}"></i>${esc(this.t(('st_' + st) as StringKey))}</span>` : '';
+    h.innerHTML = `<h1>${esc(this.headTitle())}</h1><span class="hc">${this.flat.length + this.hiddenPins}</span>${pill}`;
+  }
+
+  private renderHero() {
+    const h = this.$('.hero');
+    if (!h) return;
+    const shared = this.col === SHARED;
+    const show = !this.q && (shared || (this.col === null && this.nav === 'history' && !this.heroOff));
+    if (!show) { h.innerHTML = ''; return; }
+    if (shared) {
+      const me = this.me();
+      const people = this.sync?.paired ? [...(me ? [me] : []), ...this.members] : [];
+      const av = people.slice(0, 6).map((p) => `<span class="av" style="background:${avColor(p)}" title="${esc(p)}">${esc([...p][0]?.toUpperCase() ?? '?')}</span>`).join('');
+      h.innerHTML = `<div class="banner b-shared"><div class="b-t">
+          <div class="b-big">${esc(this.t('sharedA'))}<em>${esc(this.t('sharedEm'))}</em>${esc(this.t('sharedB'))}</div>
+          <div class="b-sub">${esc(this.t('sharedSub'))}</div>
+          ${people.length ? `<div class="b-act"><span class="avs">${av}</span><span class="b-note">${esc(this.t('inTeam', people.length))}</span></div>` : ''}
+        </div><img class="b-img" src="${ILLU}illu_geteilt.png" alt=""></div>`;
+      return;
+    }
+    const s = this.settings;
+    h.innerHTML = `<div class="banner"><button class="b-close" data-act="heroOff" title="${esc(this.t('close'))}">${icon('x', 12)}</button><div class="b-t">
+        <div class="b-big">${esc(this.t('heroA'))}<em>${esc(this.t('heroEm'))}</em>${esc(this.t('heroB'))}</div>
+        <div class="b-sub">${esc(this.t('heroSub', s?.maxAgeDays ?? 2, this.data?.historyCount ?? 0, this.pinnedCount))}</div>
+        <div class="b-act"><button class="btn light" data-act="newCollection">${icon('layers', 15)}${esc(this.t('newCollection'))}</button><span class="keys">${this.keycaps(s?.hotkey ?? 'Control+Shift+V')}<span>${esc(this.t('anywhere'))}</span></span></div>
+      </div><img class="b-img" src="${ILLU}illu_bilder_sammeln.png" alt=""></div>`;
+  }
+
+  private renderConnect() {
+    const c = this.$('.connect-slot');
+    if (!c) return;
+    const sy = this.sync;
+    const need = this.col === SHARED && (!this.settings?.sync.enabled || !sy?.paired);
+    for (const sel of ['.top', '.filters', '.body']) { const n = this.$(sel); if (n) n.hidden = need; }
+    if (!need) { c.innerHTML = ''; return; }
+    c.innerHTML = `<div class="connect"><div class="ct">
+        <h2>${esc(this.t('connectTitle'))}</h2><p class="lead">${esc(this.t('connectLead'))}</p>
+        <ol><li><span>1</span>${esc(this.t('connectStep1'))}</li><li><span>2</span>${esc(this.t('connectStep2'))}</li><li><span>3</span>${esc(this.t('connectStep3'))}</li></ol>
+        <div class="joinrow"><input class="field" data-field="pairCode" value="${esc(this.pairInput)}" placeholder="${esc(this.t('syncCodePh'))}" spellcheck="false" autocomplete="off"><button class="btn primary" data-act="syncPairJoin">${icon('key', 15)}${esc(this.t('pairBtn'))}</button></div>
+        <div class="fine">${icon('lock', 13)}${esc(this.t('e2e'))}${sy?.reason ? ' · ' + esc(sy.reason) : ''}</div>
+      </div></div>`;
   }
 
   private renderFilters() {
@@ -221,8 +369,16 @@ export class ClipVaultView {
     if (!f || !this.data) return;
     const n = this.data.counts;
     const shared = this.col === SHARED;
-    f.innerHTML = (shared ? [] : TYPES).map((ty) => `<button class="seg ${this.type === ty ? 'on' : ''}" data-type="${ty}">${esc(this.t(ty as StringKey))}${ty !== 'all' && n[ty] ? `<span class="n">${n[ty]}</span>` : ''}</button>`).join('')
-      + `<span class="count">${esc(this.flat.length === 1 ? this.t('entry') : this.t('entries', this.flat.length))}</span>`;
+    const people = shared && this.members.length
+      ? [['*', this.t('everyone')], ...this.members.map((m) => [m, m]), ['', this.t('fromMe')]].map(([v, l]) => {
+        const on = (v === '*' ? this.person === null : this.person === v);
+        const dot = v && v !== '*' ? `<i class="pdot" style="background:${avColor(v!)}"></i>` : '';
+        return `<button class="seg person ${on ? 'on' : ''}" data-person="${esc(v)}">${dot}${esc(l)}</button>`;
+      }).join('')
+      : '';
+    const hide = this.mode === 'hub' && (this.col === null && this.nav !== 'history' && this.nav !== 'pinned');
+    f.innerHTML = (shared ? people : hide ? '' : TYPES.map((ty) => `<button class="seg ${this.type === ty ? 'on' : ''}" data-type="${ty}">${esc(this.t(ty as StringKey))}${ty !== 'all' && n[ty] ? `<span class="n">${n[ty]}</span>` : ''}</button>`).join(''))
+      + (this.mode === 'panel' ? `<span class="count">${esc(this.flat.length === 1 ? this.t('entry') : this.t('entries', this.flat.length))}</span>` : '');
   }
 
   private renderBanners() {
@@ -253,7 +409,46 @@ export class ClipVaultView {
     return `<div class="tile">${icon('text', 18)}</div>`;
   }
 
+  private hhmm(ts: number) { return new Date(ts * 1000).toLocaleTimeString(this.api.locale === 'de' ? 'de-DE' : 'en-US', { hour: '2-digit', minute: '2-digit' }); }
+  /** time column: HH:MM today, else the short date (shared list has no day sections) */
+  private rowTime(it: ItemView) {
+    const d = new Date(it.ts * 1000);
+    if (it.collection !== SHARED || d.toDateString() === new Date().toDateString()) return this.hhmm(it.ts);
+    return d.toLocaleDateString(this.api.locale === 'de' ? 'de-DE' : 'en-US', { day: 'numeric', month: 'short' });
+  }
+
+  private hubRowHTML(it: ItemView): string {
+    const inShared = it.collection === SHARED;
+    const me = this.me().toLowerCase();
+    const who = it.source ?? '';
+    const mine = inShared && who.toLowerCase() === me;
+    const tile = inShared && !(it.kind === 'image' && it.thumbUrl)
+      ? `<div class="av lg" style="background:${avColor(who || '?')}">${esc([...who][0]?.toUpperCase() ?? '?')}</div>`
+      : this.tileFor(it);
+    const tags: string[] = [];
+    if (it.masked) tags.push(`<span class="tag secret">${esc(this.t('hidden'))}</span>`);
+    else for (const b of it.badges.slice(0, 2)) if (!(b === 'link' && it.isLink)) tags.push(`<span class="tag ${esc(b)}">${esc(b === 'code' ? 'Code' : b === 'email' ? 'E-Mail' : b === 'phone' ? (this.api.locale === 'de' ? 'Telefon' : 'Phone') : b === 'color' ? (this.api.locale === 'de' ? 'Farbe' : 'Color') : b === 'link' ? 'Link' : b)}</span>`);
+    if (it.shared && !inShared) tags.push(`<span class="tag shared">${esc(this.t('shared'))}</span>`);
+    const report = inShared && it.title.startsWith('# Flow-Fehlerbericht');
+    if (report) tags.push(`<span class="tag code">${esc(this.api.locale === 'de' ? 'Fehlerbericht' : 'Error report')}</span>`);
+    const subText = inShared
+      ? [mine ? this.t('youShared') : this.t('theyShared', who), ...it.subtitle.split(' · ').slice(1)].filter(Boolean).join(' · ')
+      : it.subtitle;
+    return `<div class="row hrow ${it.id === this.sel ? 'sel' : ''}" data-id="${esc(it.id)}" draggable="${inShared ? 'false' : 'true'}">
+      <div class="tm">${esc(this.rowTime(it))}</div>
+      ${tile}
+      <div class="meta"><div class="title">${esc(it.masked ? '••••••••••••' : report ? it.title.replace(/^#\s*/, '') : it.title)}</div><div class="sub">${tags.join('')}<span>${esc(subText)}</span></div></div>
+      ${it.pinned ? `<span class="pinmark">${icon('pinFill', 15)}</span>` : ''}
+      <div class="rowacts">
+        <button class="iconbtn" data-act="copy" data-id="${esc(it.id)}" title="${esc(this.t('copy'))}">${icon('copy', 15)}</button>
+        <button class="iconbtn ${it.pinned ? 'on' : ''}" data-act="pin" data-id="${esc(it.id)}" title="${esc(it.pinned ? this.t('unpin') : this.t('pin'))}">${icon(it.pinned ? 'pinFill' : 'pin', 15)}</button>
+        <button class="iconbtn danger" data-act="delete" data-id="${esc(it.id)}" title="${esc(this.t('delete'))}">${icon('trash', 15)}</button>
+      </div>
+    </div>`;
+  }
+
   private rowHTML(it: ItemView, quick: number | null): string {
+    if (this.mode === 'hub') return this.hubRowHTML(it);
     const tags: string[] = [];
     if (it.masked || it.expiresInH !== null && it.expiresInH !== undefined) {
       tags.push(`<span class="tag secret">${esc(it.masked ? this.t('hidden') : this.t('reveal'))}</span>`);
@@ -263,9 +458,7 @@ export class ClipVaultView {
       if (it.shared && it.collection !== SHARED) tags.push(`<span class="tag shared">${esc(this.t('shared'))}</span>`);
     }
     const sub = [it.subtitle, this.fmtTime(it.ts)].filter(Boolean).join(' · ');
-    const acts = this.mode === 'hub'
-      ? `<button class="iconbtn" data-act="copy" data-id="${esc(it.id)}" title="${esc(this.t('copy'))}">${icon('copy', 15)}</button>`
-      : '';
+    const acts = '';
     return `<div class="row ${it.id === this.sel ? 'sel' : ''}" data-id="${esc(it.id)}" draggable="${it.collection === SHARED ? 'false' : 'true'}">
       ${this.tileFor(it)}
       <div class="meta"><div class="title">${esc(it.title)}</div><div class="sub">${tags.join('')}<span>${esc(sub)}</span></div></div>
@@ -281,18 +474,26 @@ export class ClipVaultView {
   private renderList() {
     const l = this.$('.list');
     if (!l || !this.data) return;
-    this.$('.body')?.classList.toggle('noprev', !this.flat.length);
-    if (!this.flat.length) {
+    (this.$('.frame') ?? this.$('.body'))?.classList.toggle('noprev', !this.flat.length);
+    if (!this.flat.length && !this.hiddenPins) {
       const searching = !!this.q.trim() || this.type !== 'all';
       l.innerHTML = `<div class="empty"><div><div class="ring">${icon(searching ? 'search' : 'copy', 22)}</div><h3>${esc(searching ? this.t('noResults') : this.t('empty'))}</h3><p>${esc(searching ? this.t('noResultsHint') : this.t('emptyHint'))}</p></div></div>`;
       return;
     }
     let n = 0;
     const secTitle = (k: string) => (k === 'pinned' ? this.t('pinned') : k === 'today' ? this.t('today') : k === 'yesterday' ? this.t('yesterday') : k === 'collection' || k === 'shared' ? '' : new Date(k + 'T12:00:00').toLocaleDateString(this.api.locale === 'de' ? 'de-DE' : 'en-US', { weekday: 'long', day: 'numeric', month: 'long' }));
+    const hub = this.mode === 'hub';
     l.innerHTML = this.data.sections.map((s) => {
       const title = secTitle(s.key);
-      return (title ? `<div class="sec ${s.key === 'pinned' ? 'pinned' : ''}">${s.key === 'pinned' ? icon('pinFill', 11) : ''}${esc(title)}</div>` : '')
-        + s.items.map((it) => { n++; return this.rowHTML(it, n <= 9 ? n : null); }).join('');
+      const pinned = s.key === 'pinned';
+      if (pinned && !s.items.length && !this.hiddenPins) return '';
+      const cnt = pinned ? (s.items.length || this.hiddenPins) : s.items.length;
+      const canFold = pinned && this.col === null && this.nav !== 'pinned' && !this.q;
+      const head = !title ? '' : canFold
+        ? `<button class="sec pinned fold ${this.pinCollapsed ? 'closed' : ''}" data-act="togglePins" title="${esc(this.pinCollapsed ? this.t('reveal') : this.t('pinsHidden'))}">${icon(this.pinCollapsed ? 'right' : 'down', 12)}${icon('pinFill', 11)}<span>${esc(title)}</span><span class="sn">${cnt}</span></button>`
+        : `<div class="sec ${pinned ? 'pinned' : ''}">${pinned ? icon('pinFill', 11) : ''}<span>${esc(title)}</span>${hub ? `<span class="sn">${cnt}</span>` : ''}</div>`;
+      const rows = s.items.map((it) => { n++; return this.rowHTML(it, n <= 9 ? n : null); }).join('');
+      return head + (hub ? (rows ? `<div class="grp">${rows}</div>` : '') : rows);
     }).join('');
     for (const img of l.querySelectorAll('img[data-fallback]')) {
       img.addEventListener('error', () => void this.fallbackImage(img as HTMLImageElement), { once: true });
@@ -307,11 +508,74 @@ export class ClipVaultView {
     } catch { /* leave empty */ }
   }
 
+  private relTime(ts: number) {
+    const s = Date.now() / 1000 - ts;
+    if (s < 90) return this.t('justNow');
+    if (s < 3600) return this.t('minAgo', Math.round(s / 60));
+    if (s < 6 * 3600) return this.t('hAgo', Math.round(s / 3600));
+    return this.fmtTime(ts);
+  }
+
+  private renderHubPreview(p: HTMLElement, it: ItemView) {
+    const inShared = it.collection === SHARED;
+    const de = this.api.locale === 'de';
+    const loc = de ? 'de-DE' : 'en-US';
+    const d = new Date(it.ts * 1000);
+    const date = d.toLocaleDateString(loc, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) + ' · ' + this.hhmm(it.ts);
+    const kind = it.kind === 'image' ? ['image', this.t('kImage')] : it.kind === 'file' ? ['file', this.t('kFile')] : it.isLink ? ['link', this.t('kLink')] : ['text', this.t('kText')];
+    const cols = this.data?.collections ?? [];
+    const colName = it.collection && !inShared ? cols.find((c) => c.id === it.collection)?.name : null;
+    let body: string;
+    let stats = '';
+    if (it.masked && !this.revealed.has(it.id)) {
+      body = `<div class="pmask">${icon('lock', 26)}<div>${esc(this.t('hidden'))}</div><button class="btn" data-act="reveal">${icon('eye', 15)}${esc(this.t('reveal'))}</button></div>`;
+    } else if (it.kind === 'image') {
+      const src = it.imageUrl ?? it.thumbUrl ?? '';
+      body = `<div class="pimg" data-act="viewer"><img data-fallback="${esc(it.id)}" src="${esc(src)}" alt=""></div>${it.text ? `<div class="ocr">${esc(it.text)}</div>` : ''}`;
+      if (it.w) stats = `${it.w} × ${it.h}`;
+    } else if (it.kind === 'file') {
+      body = `<div class="pfiles">${(it.fileNames ?? []).map((f) => `<div class="frow">${icon('file', 18)}<span>${esc(f)}</span></div>`).join('')}</div>`;
+    } else {
+      const txt = it.text ?? '';
+      const code = it.badges.includes('code');
+      body = `${it.color ? `<div class="swatch" style="background:${esc(it.color)}"></div>` : ''}${code ? `<pre class="ptext code">${esc(txt)}</pre>` : `<div class="ptext">${esc(txt)}</div>`}`;
+      const words = txt.trim() ? txt.trim().split(/\s+/).length : 0;
+      const lines = txt ? txt.split(/\r?\n/).length : 0;
+      stats = [this.t('nChars', [...txt].length), words === 1 ? this.t('oneWord') : this.t('nWords', words), lines === 1 ? this.t('oneLine') : this.t('nLines', lines)].join(' · ');
+    }
+    const det: [string, string][] = inShared
+      ? [[this.t('lblFrom'), it.source ?? '–'], [this.t('lblShared'), this.relTime(it.ts)]]
+      : [[this.t('lblCopied'), this.relTime(it.ts)], [this.t('lblSource'), it.subtitle.split(' · ')[0] || '–'], [this.t('lblColl'), colName ?? '–']];
+    const syncOn = !!this.settings?.sync.enabled;
+    const g = (act: string, ic: string, label: string, cls = '') => `<button class="gbtn ${cls}" data-act="${act}">${icon(ic, 17)}<span>${esc(label)}</span></button>`;
+    p.innerHTML = `
+      <div class="pscroll">
+        <div class="pk"><span class="kchip">${icon(kind[0]!, 13)}${esc(kind[1]!)}</span>${it.pinned ? `<span class="kchip pin">${icon('pinFill', 12)}${esc(this.t('navPinned'))}</span>` : ''}</div>
+        <div class="pdate">${esc(date)}</div>
+        ${body}
+        ${stats ? `<div class="pstats">${esc(stats)}</div>` : ''}
+        <div class="plbl">${esc(this.t('lblDetails'))}</div>
+        <dl class="pdl">${det.map(([k, v]) => `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl>
+      </div>
+      <div class="pfoot">
+        <button class="btn primary big" data-act="copy">${icon('copy', 17)}<span>${esc(this.t('copy'))}</span><span class="k">↵</span></button>
+        <div class="pgrid">
+          ${g('pin', it.pinned ? 'pinFill' : 'pin', it.pinned ? this.t('unpin') : this.t('pin'), it.pinned ? 'on' : '')}
+          ${!inShared ? g('more', 'layers', this.t('lblColl')) : g('more', 'more', this.t('more'))}
+          ${syncOn && !inShared ? g(it.shared ? 'unshare' : 'share', 'users', it.shared ? this.t('unshare') : this.t('share')) : ''}
+          ${it.kind === 'image' ? g('viewer', 'fit', this.t('openViewer')) : it.isLink && !it.masked ? g('openLink', 'external', this.t('openLink')) : ''}
+          ${g('delete', 'trash', this.t('delete'), 'danger')}
+        </div>
+      </div>`;
+    for (const img of p.querySelectorAll('img[data-fallback]')) img.addEventListener('error', () => void this.fallbackImage(img as HTMLImageElement), { once: true });
+  }
+
   private renderPreview() {
     const p = this.$('.prev');
     if (!p) return;
     const it = this.detail;
     if (!it || !this.flat.length) { p.innerHTML = ''; return; }
+    if (this.mode === 'hub') { this.renderHubPreview(p, it); return; }
     const inShared = it.collection === SHARED;
     const cols = this.data?.collections ?? [];
     const colName = it.collection && !inShared ? cols.find((c) => c.id === it.collection)?.name : null;
@@ -359,45 +623,62 @@ export class ClipVaultView {
     const s = this.settings;
     if (!el || !s) return;
     const sw = (key: string, on: boolean, disabled = false) => `<button class="switch ${on ? 'on' : ''}" data-set="${key}" ${disabled ? 'disabled' : ''} role="switch" aria-checked="${on}"></button>`;
-    const opt = (title: string, hint: string, ctl: string) => `<div class="opt"><div class="ot"><div>${esc(title)}</div>${hint ? `<div>${esc(hint)}</div>` : ''}</div>${ctl}</div>`;
+    const opt = (title: string, hint: string, ctl: string, cls = '') => `<div class="opt ${cls}"><div class="ot"><div>${esc(title)}</div>${hint ? `<div>${esc(hint)}</div>` : ''}</div>${ctl ? `<div class="oc">${ctl}</div>` : ''}</div>`;
     const sy = this.sync ?? { state: 'off' };
-    const dotCls = sy.state === 'connected' ? 'ok' : sy.state === 'offline' ? 'bad' : sy.state === 'off' ? '' : 'warn';
-    const stKey = ('st_' + (s.sync.enabled ? sy.state : 'off')) as StringKey;
-    const syncCard = !s.sync.enabled
-      ? `<div class="card">${opt(this.t('syncEnable'), this.t('syncOffHint'), sw('sync.enabled', false))}</div>`
-      : `<div class="card">
-          ${opt(this.t('syncEnable'), '', sw('sync.enabled', true))}
-          <div class="opt"><div class="ot"><div class="status"><span class="dot ${dotCls}"></span>${esc(this.t(stKey))}${sy.reason ? ' – ' + esc(sy.reason) : ''}${sy.queue ? ' · ' + esc(this.t('queue', sy.queue)) : ''}</div></div></div>
-          <div class="opt"><div class="ot"><div>${esc(this.t('syncName'))}</div></div><input class="field" data-field="sync.name" value="${esc(s.sync.name)}" placeholder="${esc(this.api.locale === 'de' ? 'z. B. Lena' : 'e.g. Lena')}"></div>
-          ${sy.pairingCode ? `<div class="opt"><div class="ot"><div class="paircode">${esc(sy.pairingCode)}</div><div>${esc(this.t('syncCodeHint'))}</div></div><div style="display:flex;flex-direction:column;gap:6px"><button class="btn" data-act="copyCode">${icon('copy', 15)}${esc(this.t('copy'))}</button><button class="btn" data-act="syncPairCancel">${esc(this.t('syncCancel'))}</button></div></div>` : ''}
-          ${sy.paired
-            ? `<div class="opt"><div class="ot"><div>${esc(this.t('syncPaired'))}</div><div>${esc(sy.host ?? '')}</div></div><button class="btn" data-act="syncPairCreate">${esc(this.t('syncPairCreate'))}</button><button class="btn danger" data-act="syncUnpair">${esc(this.t('syncUnpair'))}</button></div>`
-            // not paired: joining with a code comes FIRST (the code already contains the address) – creating an own
-            // vault (worker URL + init secret) is the rarer case and comes below
-            : `<div class="opt"><div class="ot"><div>${esc(this.t('syncPairJoin'))}</div><div>${esc(this.t('syncJoinHint'))}</div></div><input class="field" style="width:260px" data-field="pairCode" value="${esc(this.pairInput)}" placeholder="${esc(this.t('syncCodePh'))}"><button class="btn" data-act="syncPairJoin">${esc(this.t('syncPairJoin'))}</button></div>
-               <div class="opt"><div class="ot"><div>${esc(this.t('syncNewVault'))}</div><div>${esc(this.t('syncInitHint'))}</div></div></div>
-               <div class="opt"><input class="field" style="width:300px" data-field="syncUrl" value="${esc(this.urlInput || sy.url || '')}" placeholder="${esc(this.t('syncUrlPh'))}"><input class="field" style="width:150px" type="password" data-field="initSecret" value="${esc(this.secretInput)}" placeholder="${esc(this.t('syncInitPh'))}"><button class="btn" data-act="syncSetup">${esc(this.t('syncSave'))}</button></div>
-               ${sy.state === 'unpaired' ? `<div class="opt"><div class="ot"><div></div></div><button class="btn" data-act="syncPairCreate">${esc(this.t('syncPairCreate'))}</button></div>` : ''}`}
-        </div>`;
+    const st = s.sync.enabled ? sy.state : 'off';
+    const dotCls = st === 'connected' ? 'ok' : st === 'offline' ? 'bad' : st === 'off' ? '' : 'warn';
+    const statusHint = !s.sync.enabled ? this.t('statusHintOff')
+      : [sy.paired && sy.host ? sy.host : '', sy.reason ?? '', sy.queue ? this.t('queue', sy.queue) : ''].filter(Boolean).join(' · ');
+    const codeBox = sy.pairingCode
+      ? `<div class="opt col"><div class="ot"><div>${esc(this.t('syncPairCreate'))}</div><div>${esc(this.t('syncCodeHint'))}</div></div>
+          <div class="paircode">${esc(sy.pairingCode)}</div>
+          <div class="brow"><button class="btn primary" data-act="copyCode">${icon('copy', 15)}${esc(this.t('copyCode'))}</button><button class="btn" data-act="syncPairCancel">${esc(this.t('syncCancel'))}</button></div></div>`
+      : '';
+    let syncBody = '';
+    if (s.sync.enabled) {
+      syncBody += opt(this.t('syncName'), this.t('nameHint'), `<input class="field" data-field="sync.name" value="${esc(s.sync.name)}" placeholder="${esc(this.api.locale === 'de' ? 'z. B. Lena' : 'e.g. Lena')}">`);
+      if (!sy.paired) {
+        syncBody += `<div class="opt col"><div class="ot"><div>${esc(this.t('syncPairJoin'))}</div><div>${esc(this.t('syncJoinHint'))}</div></div>
+          <div class="joinrow"><input class="field" data-field="pairCode" value="${esc(this.pairInput)}" placeholder="${esc(this.t('syncCodePh'))}" spellcheck="false" autocomplete="off"><button class="btn primary" data-act="syncPairJoin">${icon('key', 15)}${esc(this.t('pairBtn'))}</button></div></div>`;
+        syncBody += codeBox;
+        syncBody += `<button class="adv ${this.showAdvanced ? 'open' : ''}" data-act="toggleAdv">${icon(this.showAdvanced ? 'down' : 'right', 13)}${esc(this.t('advanced'))}</button>`;
+        if (this.showAdvanced) {
+          syncBody += `<div class="opt col"><div class="ot"><div>${esc(this.t('syncNewVault'))}</div><div>${esc(this.t('syncInitHint'))}</div></div>
+            <div class="joinrow"><input class="field" data-field="syncUrl" value="${esc(this.urlInput || sy.url || '')}" placeholder="${esc(this.t('syncUrlPh'))}"><input class="field sm" type="password" data-field="initSecret" value="${esc(this.secretInput)}" placeholder="${esc(this.t('syncInitPh'))}"><button class="btn" data-act="syncSetup">${esc(this.t('syncSave'))}</button></div>
+            ${sy.state === 'unpaired' ? `<div class="brow"><button class="btn" data-act="syncPairCreate">${esc(this.t('syncPairCreate'))}</button></div>` : ''}</div>`;
+        }
+      } else {
+        syncBody += sy.pairingCode ? codeBox : opt(this.t('invite'), this.t('inviteHint'), `<button class="btn" data-act="syncPairCreate">${icon('plus', 15)}${esc(this.t('inviteBtn'))}</button>`);
+        syncBody += opt(this.t('leave'), this.t('leaveHint'), `<button class="btn danger" data-act="syncUnpair">${icon('logout', 15)}${esc(this.t('syncUnpair'))}</button>`);
+      }
+    }
+    const syncCard = `<div class="card">
+        <div class="opt"><div class="ot"><div class="status big"><i class="dot ${dotCls}"></i>${esc(this.t(('st_' + st) as StringKey))}</div>${statusHint ? `<div>${esc(statusHint)}</div>` : ''}</div><div class="oc">${sw('sync.enabled', s.sync.enabled)}</div></div>
+        ${syncBody}
+      </div>`;
+    const num = (f: string, v: number, min: number, max: number, unit: string) => `<label class="unit"><input class="field num" type="number" min="${min}" max="${max}" data-field="${f}" value="${v}"><span>${esc(unit)}</span></label>`;
     el.innerHTML = `
-      <h3>${esc(this.t('settings'))}</h3>
+      <h1 class="sh">${esc(this.t('settings'))}</h1>
+      <div class="slbl">${esc(this.t('sync'))}</div>
+      ${syncCard}
+      <div class="slbl">${esc(this.t('secHistory'))}</div>
+      <div class="card">
+        ${opt(this.t('sRetention'), this.t('retentionHint', s.maxAgeDays, s.maxItems, s.quotaMB), '', 'col')}
+        <div class="opt units">${num('maxAgeDays', s.maxAgeDays, 1, 30, this.t('sDays'))}${num('maxItems', s.maxItems, 20, 2000, this.t('sMax'))}${num('quotaMB', s.quotaMB, 50, 20000, this.t('sQuota'))}</div>
+        ${opt(this.t('sClear'), this.t('sClearConfirm').replace(/^[^?]*\?\s*/, ''), `<button class="btn danger" data-act="clearHistory">${icon('trash', 15)}${esc(this.t('sClear'))}</button>`)}
+      </div>
+      <div class="slbl">${esc(this.t('secOpen'))}</div>
+      <div class="card">
+        ${opt(this.t('sHotkey'), this.t('hotkeyHint'), `<span class="keys">${this.keycaps(s.hotkey)}</span><input class="field" data-field="hotkey" value="${esc(s.hotkey)}" style="width:170px">`)}
+        ${opt(this.t('sPaste'), this.t('sPasteHint'), sw('pasteOnEnter', s.pasteOnEnter))}
+      </div>
+      <div class="slbl">${esc(this.t('secPrivacy'))}</div>
       <div class="card">
         ${opt(this.t('sPause'), '', sw('paused', s.paused))}
-        ${opt(this.t('sPaste'), this.t('sPasteHint'), sw('pasteOnEnter', s.pasteOnEnter))}
         ${opt(this.t('sPasswords'), this.t('sPasswordsHint'), sw('skipPasswordLike', s.skipPasswordLike))}
         ${opt(this.t('sEncrypt'), s.dpapiAvailable ? this.t('sEncryptHint') : this.t('sEncryptNA'), sw('encryptAtRest', s.encryptAtRest && s.dpapiAvailable, !s.dpapiAvailable))}
-        ${opt(this.t('sHotkey'), '', `<input class="field" data-field="hotkey" value="${esc(s.hotkey)}" style="width:170px">`)}
-      </div>
-      <h3>${esc(this.t('sRetention'))}</h3>
-      <div class="card">
-        ${opt(this.t('sDays'), '', `<input class="field num" type="number" min="1" max="30" data-field="maxAgeDays" value="${s.maxAgeDays}">`)}
-        ${opt(this.t('sMax'), '', `<input class="field num" type="number" min="20" max="2000" data-field="maxItems" value="${s.maxItems}">`)}
-        ${opt(this.t('sQuota'), '', `<input class="field num" type="number" min="50" max="20000" data-field="quotaMB" value="${s.quotaMB}">`)}
-        <div class="opt"><div class="ot"><div>${esc(this.t('sIgnored'))}</div><textarea class="field" data-field="ignoredApps" spellcheck="false">${esc(s.ignoredApps.join('\n'))}</textarea></div></div>
-        ${opt(this.t('sClear'), '', `<button class="btn danger" data-act="clearHistory">${icon('trash', 15)}${esc(this.t('sClear'))}</button>`)}
-      </div>
-      <h3>${esc(this.t('sync'))}</h3>
-      ${syncCard}`;
+        <div class="opt col"><div class="ot"><div>${esc(this.t('sIgnored'))}</div></div><textarea class="field" data-field="ignoredApps" spellcheck="false">${esc(s.ignoredApps.join('\n'))}</textarea></div>
+      </div>`;
   }
 
   private async setSetting(patch: Record<string, unknown>) {
@@ -432,9 +713,18 @@ export class ClipVaultView {
       case 'clearHistory': if (confirm(this.t('sClearConfirm'))) await this.api.invoke('clearHistory'); break;
       case 'syncSetup': await this.syncCall('syncSetup', this.urlInput, this.secretInput); this.secretInput = ''; break;
       case 'syncPairCreate': await this.syncCall('syncPairCreate'); break;
-      case 'syncPairJoin': await this.syncCall('syncPairJoin', this.pairInput); this.pairInput = ''; break;
+      case 'syncPairJoin': {
+        const code = this.pairInput.trim();
+        if (!code) { (this.$('input[data-field="pairCode"]') as HTMLInputElement | null)?.focus(); break; }
+        if (this.settings && !this.settings.sync.enabled) await this.setSetting({ sync: { enabled: true } });
+        await this.syncCall('syncPairJoin', code); this.pairInput = ''; break;
+      }
+      case 'toFlow': this.api.onSwitch?.(); break;
+      case 'heroOff': this.heroOff = true; lsSet('cv.heroOff', true); this.renderHero(); break;
+      case 'togglePins': this.pinCollapsed = !this.pinCollapsed; lsSet('cv.pinCollapsed', this.pinCollapsed); this.sel = null; await this.refresh(); break;
+      case 'toggleAdv': this.showAdvanced = !this.showAdvanced; this.render(); break;
       case 'syncPairCancel': await this.syncCall('syncPairCancel'); break;
-      case 'syncUnpair': await this.syncCall('syncUnpair'); break;
+      case 'syncUnpair': if (confirm(this.t('leaveConfirm'))) await this.syncCall('syncUnpair'); break;
       case 'copyCode': if (this.sync?.pairingCode) await navigator.clipboard?.writeText(this.sync.pairingCode).catch(() => {}); break;
     }
   }
@@ -704,9 +994,22 @@ export class ClipVaultView {
       else void this.setSetting({ [k]: !(this.settings as unknown as Record<string, boolean>)[k] });
       return;
     }
+    const navEl = t.closest('[data-nav]') as HTMLElement | null;
+    if (navEl) {
+      this.nav = navEl.dataset.nav as Nav;
+      this.col = null;
+      this.page = 'list';
+      this.type = this.nav === 'images' ? 'images' : this.nav === 'links' ? 'links' : this.nav === 'files' ? 'files' : 'all';
+      this.sel = null;
+      void this.refresh();
+      return;
+    }
+    const perEl = t.closest('[data-person]') as HTMLElement | null;
+    if (perEl) { const v = perEl.dataset.person ?? ''; this.person = v === '*' ? null : v; this.sel = null; void this.refresh(); return; }
     const colEl = t.closest('[data-col]') as HTMLElement | null;
     if (colEl) {
       this.col = colEl.dataset.col || null;
+      this.nav = 'history';
       this.page = 'list';
       this.type = 'all';
       this.sel = null;

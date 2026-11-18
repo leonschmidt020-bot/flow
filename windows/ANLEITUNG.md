@@ -55,10 +55,16 @@ egal ob Windows oder Mac.
 
 1. Jemand, der schon im Tresor ist, erzeugt in seinem ClipVault einen **Kopplungscode** (beginnt mit `cvpair1.`) und
    schickt ihn dir privat. Der Code gilt 15 Minuten.
-2. Bei dir das **Flow-Fenster** öffnen (Flow-Symbol unten rechts → **Flow öffnen**, oder im ClipVault-Fenster oben rechts **⧉**) → links **ClipVault** → im ClipVault-Bereich links unten **Einstellungen** → **Teilen & Sync** → **Sync einschalten**. (Im kleinen ClipVault-Fenster selbst gibt es kein Zahnrad.)
-3. Bei **Mein Name** deinen Vornamen eintragen.
-4. Den Code bei **Mit Code koppeln** einfügen und auf den Knopf daneben klicken. Nach ein paar Sekunden steht da
-   **verbunden (live)**. Eine Adresse musst du nicht eintragen – sie steckt im Code.
+2. Bei dir das **Flow-Fenster** öffnen (Flow-Symbol unten rechts → **Flow öffnen**) und oben links neben „Flow“ auf das
+   **ClipVault-Symbol** klicken (oder links **ClipVault**). Dann links **Geteilt**.
+3. Dort steht **Mit dem Team verbinden**: Code ins Feld einfügen (Strg + V) → **Koppeln**. Sync schaltet sich dabei
+   selbst ein. Nach ein paar Sekunden steht oben **verbunden (live)**. Eine Adresse musst du nicht eintragen – sie
+   steckt im Code.
+4. Unter ClipVault → **Einstellungen** → **Teilen & Sync** bei **Mein Name** deinen Vornamen eintragen – so sehen die
+   anderen, wer etwas geteilt hat. Dort kannst du auch selbst **weitere Personen einladen** (Code erzeugen) oder dich
+   **vom Tresor trennen**.
+
+Unter **Geteilt** kannst du oben nach Person filtern (Alle · die einzelnen Namen · Von mir).
 
 **Fehlerberichte:** Wenn du willst, dass dir jemand aus dem Tresor helfen kann, wenn Flow hakt: Flow-Fenster →
 Einstellungen → **Fehlerberichte** → **Fehlerberichte automatisch an den geteilten Tresor senden** einschalten.

@@ -342,6 +342,43 @@ export async function initClipVault(ctx: ClipVaultContext): Promise<ClipVaultHan
   };
   bindHotkey();
 
+  // ---- outbox: <userData>/clipvault/outbox/ – every file dropped there is shared into the vault, then moved to outbox/sent/.
+  // Lets a coding agent (or a script) on this PC send something to the team without clicking:
+  //   *.txt / *.md → shared as text, anything else → shared as a file. Files are picked up once they stop growing.
+  const outbox = path.join(dir, 'outbox');
+  const outSent = path.join(outbox, 'sent');
+  try { fs.mkdirSync(outSent, { recursive: true }); } catch { /* ignore */ }
+  const seenSize = new Map<string, number>();
+  let outboxBusy = false;
+  const pollOutbox = async () => {
+    if (outboxBusy || !engine || !engine.snapshot().paired) return;
+    outboxBusy = true;
+    try {
+      for (const name of fs.readdirSync(outbox)) {
+        const f = path.join(outbox, name);
+        let st: fs.Stats;
+        try { st = fs.statSync(f); } catch { continue; }
+        if (!st.isFile() || name.startsWith('.') || name.startsWith('~')) continue;
+        if (seenSize.get(f) !== st.size) { seenSize.set(f, st.size); continue; } // still being written – next round
+        seenSize.delete(f);
+        try {
+          if (/\.(txt|md)$/i.test(name)) {
+            const text = fs.readFileSync(f, 'utf8').replace(/^\uFEFF/, '');
+            if (text.trim()) { const it = vault.shareText(text); await engine.enqueue(it.id); }
+          } else {
+            const r = store.addFiles([f], 'Outbox');
+            if (r) { const out = vault.share(r.item, (rel) => store.abs(rel)); store.setShared(r.item.id, true); for (const x of out) await engine.enqueue(x.id); }
+          }
+          const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+          fs.renameSync(f, path.join(outSent, `${stamp}_${name}`));
+          log(`[clipvault] outbox: shared ${name}`);
+          ctx.onToast(t('shared'), 'success');
+        } catch (err) { log(`[clipvault] outbox: ${name} failed: ${(err as Error).message}`); }
+      }
+    } catch { /* outbox missing */ } finally { outboxBusy = false; }
+  };
+  const outboxTimer = setInterval(() => { void pollOutbox(); }, 1500);
+
   // periodic retention (history ages out even when nothing is copied)
   const pruneTimer = setInterval(() => { if (store.prune()) store.persist(); }, 10 * 60 * 1000);
 
@@ -361,6 +398,7 @@ export async function initClipVault(ctx: ClipVaultContext): Promise<ClipVaultHan
       unbind?.();
       watcher.stop();
       clearInterval(pruneTimer);
+      clearInterval(outboxTimer);
       offStore(); offVault(); offFlow?.();
       powerMonitor.removeListener('resume', onResume);
       powerMonitor.removeListener('unlock-screen', onResume);

@@ -85,3 +85,10 @@ schickst du sofort einen.
 | In einem Programm kommt nichts an | Programme, die „als Administrator“ laufen, nehmen den Text nicht an. Normal starten. |
 
 Updates holt Flow selbst und installiert sie, wenn du Flow beendest. Entfernen: Windows-Einstellungen → Apps → Flow.
+
+## Etwas automatisch ins Team schicken (Ausgang-Ordner)
+Alles, was in den Ordner `%APPDATA%\Flow\clipvault\outbox\` gelegt wird, teilt Flow nach 1–3 Sekunden automatisch in den geteilten Tresor:
+- `.txt` und `.md` werden als Text geteilt.
+- Alle anderen Dateien werden als Datei geteilt.
+
+Danach wandert die Datei nach `outbox\sent\`. So kann z. B. ein Coding-Agent auf diesem PC Nachrichten, Berichte oder Dateien an das Team schicken, ohne dass jemand klickt. Voraussetzung: ClipVault ist mit einem Tresor gekoppelt („verbunden (live)“).

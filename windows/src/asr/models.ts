@@ -28,8 +28,9 @@ export const MODELS: Record<ModelId, ArchiveModel> = {
     url: BASE + 'sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2',
     archive: 'sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2',
     dir: 'sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8',
-    size: 487170055,
-    sha256: '5793d0fd397c5778d2cf2126994d58e9d56b1be7c04d13c7a15bb1b4eafb16bf',
+    // upstream replaced this asset on 2026-11-07 (same files, new pack) – size + sha256 from GitHub's digest
+    size: 487211443,
+    sha256: '1495e91b59d7fc53ddca91f3431758ec99f8fa253fdb0e1e851be0f72b14b0f9',
     kind: 'transducer',
     files: { encoder: 'encoder.int8.onnx', decoder: 'decoder.int8.onnx', joiner: 'joiner.int8.onnx', tokens: 'tokens.txt' },
     languages: '25 European languages incl. German + English (automatic)',

@@ -31,7 +31,7 @@ export interface PillCard { id: number; title: string; text: string; options: st
 export interface PillCardAnswer { id: number; save: boolean; choice?: string; timeout?: boolean }
 
 /** tall enough for the learner card above the capsule; the window is click-through except over buttons */
-export const PILL_W = 460, PILL_H = 230;
+export const PILL_W = 460, PILL_H = 270;
 /** while the Agent-Prompt card is up: room for the 476 px card right of the capsule (up to 500 px tall + illustration) */
 export const PILL_AP_W = 1100, PILL_AP_H = 580;
 
@@ -242,10 +242,10 @@ export class Pill {
 
 export function createHub(opts: { show: boolean; offscreen?: boolean }): BrowserWindow {
   const win = new BrowserWindow({
-    width: 1080, height: 740, minWidth: 820, minHeight: 560, show: false, title: 'Flow', backgroundColor: '#0b0c0f',
+    width: 1080, height: 740, minWidth: 820, minHeight: 560, show: false, title: 'Flow', backgroundColor: '#f3f2ee',
     icon: paths.asset(process.platform === 'win32' ? 'icon.ico' : 'icon.png'),
     titleBarStyle: 'hidden',
-    titleBarOverlay: process.platform === 'win32' ? { color: '#0c0d11', symbolColor: '#cfd2d8', height: 38 } : undefined,
+    titleBarOverlay: process.platform === 'win32' ? { color: '#f3f2ee', symbolColor: '#1a1a19', height: 38 } : undefined,
     autoHideMenuBar: true,
     webPreferences: { preload: paths.preload('hub'), contextIsolation: true, sandbox: false, spellcheck: false, offscreen: opts.offscreen ?? false },
   });

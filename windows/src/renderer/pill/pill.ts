@@ -174,11 +174,11 @@ function drawMeetingCard(c: MeetingCard, W: number, H: number, a: number) {
   const y0 = anchor.below ? anchor.y + 20 + (1 - a) * 6 : Math.min(H - 8, anchor.y) - 20 - ch + (1 - a) * 6;
   g.save();
   g.shadowColor = `rgba(0,0,0,${0.35 * a})`; g.shadowBlur = 14; g.shadowOffsetY = 3;
-  g.beginPath(); g.roundRect(x0, y0, cw, ch, 16);
-  g.fillStyle = `rgba(12,12,14,${0.94 * a})`; g.fill();
+  g.beginPath(); g.roundRect(x0, y0, cw, ch, 20);
+  g.fillStyle = `rgba(17,17,17,${0.97 * a})`; g.fill();
   g.restore();
-  g.beginPath(); g.roundRect(x0 + 0.5, y0 + 0.5, cw - 1, ch - 1, 15.5);
-  g.strokeStyle = `rgba(255,255,255,${0.22 * a})`; g.lineWidth = 1; g.stroke();
+  g.beginPath(); g.roundRect(x0 + 0.5, y0 + 0.5, cw - 1, ch - 1, 19.5);
+  g.strokeStyle = `rgba(255,255,255,${0.09 * a})`; g.lineWidth = 1; g.stroke();
   const by = y0 + (ch - 26) / 2;
   const bx2 = x0 + cw - 12 - bw2, bx1 = bx2 - 6 - bw1;
   const maxText = Math.max(40, bx1 - (x0 + 32) - 10);
@@ -388,8 +388,10 @@ requestAnimationFrame(frame);
 let learnerPos = '';
 function placeLearner(W: number, H: number, cx: number, cy: number, eh: number) {
   if (cardEl.hidden) return;
-  const left = Math.round(Math.max(8, Math.min(W - 8 - 336, cx - 168)));
-  const v = anchor.below ? `t${Math.round(cy + eh / 2 + 10)}` : `b${Math.round(H - (cy - eh / 2) + 10)}`;
+  const cwid = cardEl.offsetWidth || 440;
+  const left = Math.round(Math.max(8, Math.min(W - 8 - cwid, cx - cwid / 2)));
+  // below the pill the illustration tile sticks out above the card → a little more room
+  const v = anchor.below ? `t${Math.round(cy + eh / 2 + 24)}` : `b${Math.round(H - (cy - eh / 2) + 10)}`;
   const key = `${left}|${v}`;
   if (key === learnerPos) return;
   learnerPos = key;
@@ -486,7 +488,6 @@ let choice = '';
 let cardLeft = 0;      // ms of the timeout still to go
 let cardTick = 0;      // performance.now() of the last update
 let cardTimer: number | null = null;
-const ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4.5h10.5a3 3 0 0 1 3 3v12H8a3 3 0 0 1-3-3z"/><path d="M5 16.5a3 3 0 0 1 3-3h10.5"/><path d="M9 8.5h6"/></svg>';
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, text?: string): HTMLElementTagNameMap[K] {
   const e = document.createElement(tag);
@@ -513,13 +514,14 @@ function answer(save: boolean, timeout = false) {
   if (interactive) { interactive = false; api?.setInteractive(false); }
   api?.answerCard?.(a);
 }
+const CARD_ILLU = ['illu_wort_gelernt', 'illu_wort_gelernt_2', 'illu_wort_gelernt_3'];
 function drawCard() {
   if (!card) return;
   const kids: HTMLElement[] = [];
+  const body = el('div', 'c-body');
   const head = el('div', 'c-head');
-  const icon = el('div', 'c-icon'); icon.innerHTML = ICON;
-  head.append(icon, el('div', 'c-title', card.title));
-  kids.push(head, el('div', 'c-text', card.text));
+  head.append(el('div', 'c-title', card.title), el('div', 'c-text', card.text));
+  body.append(head);
   if (card.options.length > 1) {
     const chips = el('div', 'c-chips');
     for (const o of card.options) {
@@ -527,14 +529,21 @@ function drawCard() {
       b.addEventListener('click', () => { choice = o; drawCard(); });
       chips.append(b);
     }
-    kids.push(chips);
+    body.append(chips);
   }
+  // Mac look: white „Speichern“ first, quiet „Nein“ next to it
   const acts = el('div', 'c-actions');
-  const no = el('button', 'btn no', card.no); no.addEventListener('click', () => answer(false));
   const save = el('button', 'btn save', card.save); save.addEventListener('click', () => answer(true));
-  acts.append(no, save);
+  const no = el('button', 'btn no', card.no); no.addEventListener('click', () => answer(false));
+  acts.append(save, no);
+  body.append(acts);
+  const tile = el('div', 'c-tile');
+  const img = document.createElement('img'); img.src = `../../assets/illustrations/${CARD_ILLU[Math.abs(card.id) % CARD_ILLU.length]}.png`; img.alt = '';
+  const close = el('button', 'c-close'); close.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M7 7l10 10M17 7L7 17"/></svg>';
+  close.title = card.no; close.addEventListener('click', () => answer(false));
+  tile.append(img, close);
   const bar = el('div', 'c-bar'); const fill = el('i', ''); bar.append(fill);
-  kids.push(acts, bar);
+  kids.push(body, tile, bar);
   cardEl.replaceChildren(...kids);
   updateBar();
 }

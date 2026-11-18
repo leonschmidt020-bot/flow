@@ -6,6 +6,7 @@ import { mount as mountClipVault } from '../../clipvault/ui';
 import { demoState } from './demo';
 import { notetakerPage, NOTETAKER_ICON, type MeetingApi } from './notetaker';
 import { demoMeetingApi } from './notetakerDemo';
+import { demoClipVault } from './clipvaultDemo';
 import { mt } from '../../meeting/i18n';
 import { demoPromptsApi, promptSettingsRows, promptsPage, PROMPTS_ICON, type PromptsApi } from './prompts';
 import { apt } from '../../agentPrompt/i18n';
@@ -73,10 +74,10 @@ const I = {
 
 // ── sidebar ──
 function renderNav() {
-  const nav = document.getElementById('nav')!;
-  nav.replaceChildren(...(['history', 'notetaker', 'prompts', 'dictionary', 'clipvault', 'settings'] as Page[]).filter((p) => p !== 'clipvault' || S.settings.clipVault !== false).map((p) =>
-    h('button', { class: 'nav-item' + (p === page ? ' active' : ''), on: { click: () => go(p) } }, svg(I[p]),
-      p === 'notetaker' ? mt(L(), 'nav') : p === 'prompts' ? apt(L(), 'nav') : t(p === 'history' ? 'navHistory' : p === 'dictionary' ? 'navDictionary' : p === 'clipvault' ? 'navClipVault' : 'navSettings'))));
+  const item = (p: Page) => h('button', { class: 'nav-item' + (p === page ? ' active' : ''), on: { click: () => go(p) } }, svg(I[p]),
+    p === 'notetaker' ? mt(L(), 'nav') : p === 'prompts' ? apt(L(), 'nav') : t(p === 'history' ? 'navHistory' : p === 'dictionary' ? 'navDictionary' : p === 'clipvault' ? 'navClipVault' : 'navSettings'));
+  document.getElementById('nav')!.replaceChildren(...(['history', 'notetaker', 'prompts', 'dictionary', 'clipvault'] as Page[]).filter((p) => p !== 'clipvault' || S.settings.clipVault !== false).map(item));
+  document.getElementById('nav2')!.replaceChildren(item('settings'));
 }
 
 function asrLine(): { text: string; sub: string; dot: string; progress: number | null } {
@@ -106,7 +107,25 @@ interface PageView { el: HTMLElement; update(): void; dispose?(): void }
 let view: PageView | null = null;
 
 function header(title: string, lead: string, right?: Node) {
-  return h('div', { class: 'head' }, h('div', null, h('h1', { html: title }), h('p', { class: 'lead' }, lead)), right ?? null);
+  return h('div', { class: 'head' }, h('div', null, h('h1', { html: title }), lead ? h('p', { class: 'lead' }, lead) : null), right ?? null);
+}
+
+const ILLU = '../../assets/illustrations/';
+const X_ICON = '<path d="M6 6l12 12M18 6L6 18"/>';
+function readFlag(k: string): boolean { try { return localStorage.getItem(k) === '1'; } catch { return false; } }
+function writeFlag(k: string) { try { localStorage.setItem(k, '1'); } catch { /* private storage off */ } }
+
+/** dark banner with a serif headline and a drawn illustration (Mac: photo banner) */
+function banner(o: { big: string; sub: Node | string; img: string; act?: Node | null; extra?: (Node | null)[]; close?: () => void }) {
+  return h('div', { class: 'banner' },
+    o.close ? h('button', { class: 'b-close', title: L() === 'de' ? 'Schließen' : 'Close', on: { click: o.close } }, svg(X_ICON)) : null,
+    h('div', { class: 'b-t' }, h('div', { class: 'b-big', html: o.big }), h('div', { class: 'b-sub' }, o.sub),
+      ...(o.extra ?? []), o.act ? h('div', { class: 'b-act' }, o.act) : null),
+    h('img', { class: 'b-img', src: ILLU + o.img + '.png', alt: '' }));
+}
+function hotkeySub(text: string) {
+  const parts = text.split('§');
+  return h('span', null, parts[0] ?? '', h('kbd', null, hotkeyShort(L(), S.settings.hotkey)), parts[1] ?? '');
 }
 
 function onboardingHero(): HTMLElement | null {
@@ -114,14 +133,27 @@ function onboardingHero(): HTMLElement | null {
   if (a.status === 'ready' || a.status === 'loading') return null;
   const busy = a.status === 'downloading' || a.status === 'verifying' || a.status === 'extracting';
   const line = asrLine();
-  return h('div', { class: 'card hero' },
-    h('div', { class: 't' },
-      h('div', { class: 'big' }, t('onbTitle')),
-      h('div', { class: 'muted' }, a.status === 'error' ? line.text : t('onbText')),
-      h('div', { class: 'muted', style: 'margin-top:6px;font-size:12px' }, t('hotkeyNoRightCtrl')),
+  return banner({
+    big: t('onbTitle'),
+    sub: a.status === 'error' ? line.text : t('onbText'),
+    img: 'illu_willkommen',
+    extra: [
+      h('div', { class: 'b-note' }, t('hotkeyNoRightCtrl')),
       busy ? h('div', { class: 'progress' }, h('i', { style: `width:${Math.round(a.progress * 100)}%` })) : null,
-      busy ? h('div', { class: 'muted', style: 'margin-top:8px;font-size:12px' }, line.text + (line.sub ? ' · ' + line.sub : '')) : null),
-    busy ? null : h('button', { class: 'btn primary', on: { click: () => api.downloadModel(S.settings.engine) } }, t('onbStart')));
+      busy ? h('div', { class: 'b-note' }, line.text + (line.sub ? ' · ' + line.sub : '')) : null,
+    ],
+    act: busy ? null : h('button', { class: 'btn', on: { click: () => api.downloadModel(S.settings.engine) } }, t('onbStart')),
+  });
+}
+
+function welcomeBanner(onClose: () => void): HTMLElement {
+  const de = L() === 'de';
+  return banner({
+    big: de ? 'Sprich, statt zu <em>tippen.</em>' : 'Speak instead of <em>typing.</em>',
+    sub: hotkeySub(de ? 'Halte §, sprich, lass los – der Text steht da, wo dein Cursor ist.' : 'Hold §, speak, let go – the text appears where your cursor is.'),
+    img: 'illu_willkommen_2',
+    close: onClose,
+  });
 }
 
 function micNotice(): HTMLElement | null {
@@ -140,15 +172,20 @@ function dayLabel(d: Date): string {
 function historyPage(): PageView {
   let query = '';
   const listBox = h('div');
-  const statsBox = h('div', { class: 'stats' });
+  const statsBox = h('div', { class: 'card stats' });
   const heroBox = h('div');
+  let bannerClosed = !RENDER && readFlag('flow.welcomeClosed');
   const search = h('input', { class: 'input', placeholder: t('historySearch'), on: { input: (e) => { query = (e.target as HTMLInputElement).value.toLowerCase(); update(); } } });
+  const de = () => L() === 'de';
   const el = h('div', null,
-    header(L() === 'de' ? 'Dein <em>Verlauf</em>' : 'Your <em>history</em>', t('historySub')),
-    heroBox, statsBox,
-    h('div', { class: 'toolbar' }, h('div', { class: 'search' }, svg(I.search), search), h('div', { class: 'grow' }),
-      h('button', { class: 'btn ghost danger', on: { click: () => { if (confirm(t('historyClearConfirm'))) void api.clearHistory(); } } }, t('historyClear'))),
-    listBox);
+    header(de() ? 'Dein Verlauf' : 'Your history', t('historySub')),
+    h('div', { class: 'dk' },
+      h('div', { class: 'dk-hero' }, heroBox),
+      h('div', { class: 'dk-side' }, statsBox),
+      h('div', { class: 'dk-main' },
+        h('div', { class: 'toolbar' }, h('div', { class: 'search' }, svg(I.search), search), h('div', { class: 'grow' }),
+          h('button', { class: 'btn ghost danger', on: { click: () => { if (confirm(t('historyClearConfirm'))) void api.clearHistory(); } } }, t('historyClear'))),
+        listBox)));
   function row(r: HistoryItem) {
     const d = new Date(r.date);
     const copyBtn = h('button', { class: 'icon-btn', title: t('copy') }, svg(I.copy));
@@ -158,15 +195,21 @@ function historyPage(): PageView {
       h('div', null, h('div', { class: 'text' }, r.text), h('div', { class: 'meta' }, [`${r.words} ${t('words')}`, r.app.replace(/\.exe$/i, '')].filter(Boolean).join(' · '))),
       h('div', { class: 'actions' }, copyBtn, h('button', { class: 'icon-btn', title: t('delete'), on: { click: () => api.deleteHistory(r.id) } }, svg(I.trash))));
   }
+  const statLine = (n: string, l: string) => h('div', { class: 'stat-line' }, h('span', { class: 'n' }, n), h('span', { class: 'l' }, l));
   function update() {
-    heroBox.replaceChildren(...[onboardingHero(), micNotice()].filter((x): x is HTMLElement => !!x));
+    const hero = onboardingHero();
+    heroBox.replaceChildren(...[hero ?? (bannerClosed ? null : welcomeBanner(() => { bannerClosed = true; writeFlag('flow.welcomeClosed'); update(); })), micNotice()].filter((x): x is HTMLElement => !!x));
     statsBox.replaceChildren(
-      h('div', { class: 'card stat' }, h('div', { class: 'n' }, String(S.wordsToday)), h('div', { class: 'l' }, L() === 'de' ? 'Wörter heute' : 'words today')),
-      h('div', { class: 'card stat' }, h('div', { class: 'n' }, S.wordsTotal.toLocaleString(L())), h('div', { class: 'l' }, L() === 'de' ? 'Wörter insgesamt' : 'words in total')),
-      h('div', { class: 'card stat' }, h('div', { class: 'n' }, String(S.totalDictations)), h('div', { class: 'l' }, L() === 'de' ? 'Diktate' : 'dictations')));
+      h('div', { class: 'st-block' },
+        statLine(S.wordsTotal.toLocaleString(L() === 'de' ? 'de-DE' : 'en-GB'), de() ? 'Wörter gesamt' : 'words in total'),
+        statLine(S.wordsToday.toLocaleString(L() === 'de' ? 'de-DE' : 'en-GB'), de() ? 'Wörter heute' : 'words today'),
+        statLine(S.totalDictations.toLocaleString(L() === 'de' ? 'de-DE' : 'en-GB'), de() ? 'Diktate' : 'dictations')),
+      h('div', { class: 'st-block' },
+        h('div', { class: 'unl', html: de() ? '<b>Unbegrenzt</b> · alles lokal' : '<b>Unlimited</b> · all local' }),
+        h('div', { class: 'unl-d' }, de() ? 'Kein Wortlimit, kein Abo. Deine Stimme verlässt nie deinen PC.' : 'No word limit, no subscription. Your voice never leaves your PC.')));
     const items = S.history.filter((r) => !query || r.text.toLowerCase().includes(query));
     if (items.length === 0) {
-      listBox.replaceChildren(h('div', { class: 'card empty' }, h('div', { class: 'big' }, L() === 'de' ? 'Noch still hier.' : 'Quiet so far.'),
+      listBox.replaceChildren(h('div', { class: 'card empty' }, h('img', { src: ILLU + 'illu_leer.png', alt: '' }), h('div', { class: 'big' }, de() ? 'Noch still hier.' : 'Quiet so far.'),
         h('div', { html: esc(t('historyEmpty', { hotkey: '§' })).replace('§', `<kbd>${esc(hotkeyShort(L(), S.settings.hotkey))}</kbd>`) })));
       return;
     }
@@ -191,12 +234,13 @@ function dictionaryPage(): PageView {
   };
   for (const i of [heard, write]) i.addEventListener('keydown', (e) => { if ((e as KeyboardEvent).key === 'Enter') void add(); });
   const el = h('div', null,
-    header(L() === 'de' ? 'Dein <em>Wörterbuch</em>' : 'Your <em>dictionary</em>', t('dictSub')),
+    header(L() === 'de' ? 'Wörterbuch' : 'Dictionary', ''),
+    banner({ big: L() === 'de' ? 'Flow schreibt, wie <em>du</em> schreibst.' : 'Flow spells it the way <em>you</em> do.', sub: t('dictSub'), img: 'illu_wort_gelernt_2' }),
     h('div', { class: 'card dict-form' }, heard, h('div', { class: 'arrow' }, '→'), write, h('button', { class: 'btn primary', on: { click: () => void add() } }, svg(I.plus), t('dictSave'))),
     listBox);
   function update() {
     const d = S.settings.dictionary;
-    if (d.length === 0) { listBox.replaceChildren(h('div', { class: 'card empty' }, h('div', { class: 'big' }, L() === 'de' ? 'Noch leer.' : 'Empty so far.'), t('dictEmpty'))); return; }
+    if (d.length === 0) { listBox.replaceChildren(h('div', { class: 'card empty' }, h('img', { src: ILLU + 'illu_leer.png', alt: '' }), h('div', { class: 'big' }, L() === 'de' ? 'Noch leer.' : 'Empty so far.'), t('dictEmpty'))); return; }
     listBox.replaceChildren(h('div', { class: 'card list' }, ...d.map((e) => h('div', { class: 'entry' },
       h('div', { class: 'heard' }, e.heard), h('div', { class: 'arrow' }, '→'), h('div', { class: 'write' }, e.write),
       h('div', { class: 'actions' }, h('button', { class: 'icon-btn', title: t('delete'), on: { click: async () => { S = await api.setSettings({ dictionary: S.settings.dictionary.filter((x) => x !== e && x.heard !== e.heard) }); update(); } } }, svg(I.trash)))))));
@@ -262,8 +306,8 @@ function settingsPage(): PageView {
   drawAgent(); syncers.push(drawAgent);
   // sub-options of „Text dorthin, wo die Maus ist“ are greyed out while it is off
   const dependent = (r: HTMLElement) => { const f = () => r.classList.toggle('off', !S.settings.mouseTarget); f(); syncers.push(f); return r; };
-  const el = h('div', null,
-    header(L() === 'de' ? '<em>Einstellungen</em>' : '<em>Settings</em>', t('tagline')),
+  const el = h('div', { class: 'settings-page' },
+    header(L() === 'de' ? 'Einstellungen' : 'Settings', t('tagline')),
     micNotice() ?? h('span'),
     h('div', { class: 'section' }, h('h2', null, t('secHotkey')), h('div', { class: 'card' },
       row(t('hotkeyLabel'), `${t('hotkeyDesc')} ${t('hotkeyNoRightCtrl')}`, select(hkOpts, () => S.settings.hotkey, (v) => void set({ hotkey: v as Settings['hotkey'] }))),
@@ -340,6 +384,7 @@ function go(p: Page) {
   view = p === 'history' ? historyPage() : p === 'notetaker' ? meetingPage() : p === 'prompts' ? promptPage() : p === 'dictionary' ? dictionaryPage() : p === 'clipvault' ? clipVaultPage() : settingsPage();
   const box = document.getElementById('page')!;
   box.replaceChildren(view.el);
+  box.classList.toggle('flush', p === 'clipvault');
   box.scrollTop = 0;
   document.documentElement.lang = L();
   renderNav();
@@ -354,7 +399,7 @@ function mockApi(): FlowApi {
     getState: async () => st, setSettings: async (p) => { st.settings = { ...st.settings, ...p }; return st; }, deleteHistory: async () => {}, clearHistory: async () => {},
     copy: async () => {}, downloadModel: async () => {}, micDevices: async () => [{ deviceId: 'a', label: 'Mikrofon (Shure MV7)' }, { deviceId: 'b', label: 'Headset (Jabra Evolve2)' }],
     micMonitor: async () => {}, open: async () => {}, checkUpdates: async () => {}, onState: () => () => {}, onLevel: (cb) => { if (RENDER) setTimeout(() => cb(0.045), 50); return () => {}; },
-    onNavigate: () => () => {}, clipvault: { invoke: async () => null, on: () => () => {} },
+    onNavigate: () => () => {}, clipvault: { invoke: demoClipVault(q.get('lang') === 'en' ? 'en' : 'de'), on: () => () => {} },
   };
 }
 

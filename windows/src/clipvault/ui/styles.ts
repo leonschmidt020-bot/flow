@@ -178,4 +178,43 @@ textarea.field { height: 64px; padding: 7px 10px; resize: vertical; width: 100%;
 .dot { width: 8px; height: 8px; border-radius: 50%; background: #777; } .dot.ok { background: #34c759; } .dot.warn { background: #f2c55c; } .dot.bad { background: #ff6b6b; }
 .banner { margin: 0 14px 10px; padding: 9px 12px; border-radius: 9px; font-size: 12px; background: rgba(242,197,92,.1); border: 1px solid rgba(242,197,92,.3); color: #f5d98f; }
 .muted { color: var(--cv-dim); font-size: 12px; }
+
+/* ---------- hub inside Flow: the Mac app's warm light look (tokens come from the Hub) ---------- */
+/* list and preview share the width; the preview never shrinks below a readable size */
+.cv.hub .list { width: auto; flex: 1 1 360px; min-width: 280px; }
+.cv.hub .prev { flex: 1 1 300px; min-width: 260px; }
+.cv.hub { min-height: 0; }
+.cv.hub { --cv-faint: var(--text-faint, #8f8a82); --cv-hover: rgba(0, 0, 0, .035); --cv-sel: var(--panel-3, #e8e6e1); --cv-pin: #b7791f; --cv-surface: var(--card-soft, #f5f4f0); }
+.cv.hub .side { background: var(--card-soft, #f5f4f0); }
+.cv.hub .search { background: var(--card-soft, #f5f4f0); border-color: transparent; }
+.cv.hub .search:focus-within { background: #fff; border-color: rgba(140, 92, 204, .5); }
+.cv.hub .chip.on { border-color: transparent; }
+.cv.hub .seg.on { background: var(--panel-3, #e8e6e1); }
+.cv.hub .sec { background: rgba(255, 255, 255, .86); }
+.cv.hub .row.sel { box-shadow: none; }
+.cv.hub .tile { background: var(--card-soft, #f5f4f0); border-color: var(--cv-line); color: var(--text-dim, #6b6760); }
+.cv.hub .tile.t-link, .cv.hub .tag.link, .cv.hub .tag.shared { color: #2f7d76; }
+.cv.hub .tile.t-code, .cv.hub .tag.code { color: #7a4fc0; }
+.cv.hub .tile.t-email, .cv.hub .tile.t-phone, .cv.hub .tag.email, .cv.hub .tag.phone { color: #2f63b8; }
+.cv.hub .tile.t-file { color: #a06c12; } .cv.hub .tile.t-mic { color: #c0602a; } .cv.hub .tile.t-ai { color: #8c5ccc; }
+.cv.hub .tag { background: var(--panel-3, #e8e6e1); }
+.cv.hub .tag.color { color: #b8467f; }
+.cv.hub .btn { background: var(--panel-2, #efede8); border-color: transparent; font-weight: 550; }
+.cv.hub .btn:hover { background: var(--panel-3, #e8e6e1); }
+.cv.hub .btn.primary { background: var(--ink, #1c1c1c); color: #fff; }
+.cv.hub .btn.primary:hover { background: #000; }
+.cv.hub .pbody { background: var(--card-soft, #f5f4f0); border-color: transparent; }
+.cv.hub .pbody pre { color: var(--text, #1a1a19); }
+.cv.hub .pbody.img { background: repeating-conic-gradient(rgba(0,0,0,.04) 0 25%, transparent 0 50%) 0 0/16px 16px, var(--card-soft, #f5f4f0); }
+.cv.hub .ocr { background: var(--card-soft, #f5f4f0); }
+.cv.hub .menu { background: #fff; border-color: var(--cv-line); box-shadow: 0 16px 40px rgba(0, 0, 0, .14); }
+.cv.hub .empty .ring { background: var(--card-soft, #f5f4f0); }
+.cv.hub .switch { background: #d9d6cf; } .cv.hub .switch.on { background: var(--ink, #1c1c1c); }
+.cv.hub .switch::after { box-shadow: 0 1px 3px rgba(0, 0, 0, .22); }
+.cv.hub .field { background: #fff; }
+.cv.hub .paircode { background: var(--card-soft, #f5f4f0); }
+.cv.hub .banner { background: #fdf5e4; border-color: #f0d9a8; color: #8a5a10; }
+.cv.hub .viewer { background: rgba(251, 250, 247, .97); }
+.cv.hub .vnav { background: #fff; border-color: var(--cv-line); }
+.cv.hub .list { scrollbar-color: rgba(0, 0, 0, .14) transparent; }
 `;
